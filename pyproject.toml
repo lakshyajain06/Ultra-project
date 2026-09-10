@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=77,<82", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ultra-isaaclab-scene"
+version = "0.1.0"
+description = "Source-faithful Ultra robot in a simple Isaac Lab tabletop scene"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "isaaclab[isaacsim]==3.0.0b2.post1",
+    "h5py>=3.14,<4",
+    "scipy>=1.15,<2",
+]
+
+[project.optional-dependencies]
+teleop = ["isaacteleop[cloudxr]==1.4.142; sys_platform == 'linux' and platform_machine == 'x86_64'"]
+
+[tool.setuptools.packages.find]
+where = ["source"]
+
+[tool.uv]
+index-strategy = "unsafe-best-match"
+prerelease = "allow"
+# Isaac Sim 6.0.1 pins websockets 12, but Isaac Teleop's CloudXR proxy uses
+# websockets.asyncio (>=14). Keep the override explicit and lock-resolved.
+override-dependencies = ["numpy>=2", "websockets==15.0.1"]
+
+[[tool.uv.index]]
+url = "https://pypi.nvidia.com"
+explicit = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"

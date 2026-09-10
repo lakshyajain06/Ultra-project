@@ -1,0 +1,28 @@
+__pycache__/
+.pytest_cache/
+*.egg-info/
+*.pyc
+outputs/
+datasets/
+*.log
+# Generated simulation assets and training data belong in artifact storage.
+*.usd
+*.usda
+*.usdc
+*.usdz
+*.h5
+*.hdf5
+*.npy
+*.npz
+*.ply
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.onnx
+*.mp4
+*.mov
+*.avi
+*.mkv
+# Separate, locally modified upstream checkout; this project does not vendor it.
+third_party/
