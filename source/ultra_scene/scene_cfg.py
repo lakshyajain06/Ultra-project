@@ -92,7 +92,7 @@ class UltraTabletopSceneCfg(InteractiveSceneCfg):
         prim_path="{ENV_REGEX_NS}/Ultra",
         # Apply the source table2_gui placement rule to this raised table:
         # base 0.11 m below the z=0.78 top and 0.98 m behind its y=0.66 edge.
-        init_state=ULTRA_CFG.init_state.replace(pos=(0.0, 1.64, 0.67)),
+        init_state=ULTRA_CFG.init_state.replace(pos=(0.0, 1.0, 0.67)),
     )
 
     table_top = AssetBaseCfg(
