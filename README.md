@@ -239,8 +239,10 @@ demonstrations.
 The learning package contains a compact Action Chunking with Transformers
 (ACT) policy and an HDF5 training pipeline. It runs outside Isaac Sim and uses
 only dependencies already present in the project. By default, each sample uses
-the current 24 joint positions and 24 joint velocities, the head/left-wrist/
+the 22 controlled joint positions and 22 controlled joint velocities, the head/left-wrist/
 right-wrist RGB frames, and predicts the next 25 absolute 22-joint targets.
+The loader uses `observation_joint_names` metadata to remove the two passive jaw
+followers and reorder legacy 24-DOF recordings into the exact 22-action order.
 State and action statistics are fitted on the training episodes only and stored
 inside every checkpoint.
 
@@ -291,6 +293,10 @@ The runtime is deliberately separate from the controller: it emits the same
 ordered absolute torso/arm/jaw targets recorded during teleoperation. Executing
 the chunk (first-action receding horizon, temporal ensembling, or a fixed number
 of open-loop steps) remains an environment/controller policy choice.
+Manager-environment observations should expose 22 controlled `joint_pos` and
+22 controlled `joint_vel` values in action order. For a legacy 24-DOF runtime
+observation, call `policy.predict(observation, observation_joint_names)` so the
+same metadata-driven selection is applied.
 
 Run the CPU-only synthetic-data tests with:
 

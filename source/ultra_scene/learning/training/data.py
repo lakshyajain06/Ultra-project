@@ -32,6 +32,7 @@ class Episode:
     key: str
     length: int
     status: str
+    controlled_joint_indices: tuple[int, ...]
 
     @property
     def identity(self):
@@ -87,6 +88,15 @@ def discover_episodes(config: DatasetConfig):
             action_names = tuple(metadata.get("action_joint_names", ()))
             if action_names != ULTRA_ACTION_JOINT_NAMES:
                 raise ValueError(f"{path} action_joint_names do not match the canonical Ultra target order")
+            observation_names = tuple(metadata.get("observation_joint_names", ()))
+            if not observation_names:
+                raise ValueError(f"{path} metadata has no observation_joint_names")
+            if len(set(observation_names)) != len(observation_names):
+                raise ValueError(f"{path} observation_joint_names contains duplicates")
+            missing_controlled = set(action_names).difference(observation_names)
+            if missing_controlled:
+                raise ValueError(f"{path} observation_joint_names is missing {sorted(missing_controlled)}")
+            controlled_indices = tuple(observation_names.index(name) for name in action_names)
             if "data" not in handle:
                 raise ValueError(f"{path} has no /data group")
             for key, demo in handle["data"].items():
@@ -106,16 +116,27 @@ def discover_episodes(config: DatasetConfig):
                     for name in required:
                         if len(demo[name]) != length:
                             raise ValueError(f"{path}::{key}/{name} is not aligned with actions")
+                    for name in set(config.state_keys).intersection(("joint_pos", "joint_vel")):
+                        shape = demo[f"obs/{name}"].shape
+                        if len(shape) != 2 or shape[1] != len(observation_names):
+                            raise ValueError(
+                                f"{path}::{key}/obs/{name} must match {len(observation_names)} "
+                                f"observation_joint_names; got {shape}"
+                            )
                     for name in config.camera_names:
                         shape = demo[f"obs/{name}"].shape
                         if len(shape) != 4 or shape[-1] != 3 or demo[f"obs/{name}"].dtype != np.uint8:
                             raise ValueError(f"{path}::{key}/obs/{name} must be uint8 [T,H,W,3]; got {shape}")
-                    shapes = tuple(demo[f"obs/{name}"].shape[1:] for name in (*config.state_keys, *config.camera_names))
+                    shapes = tuple(
+                        (len(action_names),) if name in ("joint_pos", "joint_vel")
+                        else demo[f"obs/{name}"].shape[1:]
+                        for name in (*config.state_keys, *config.camera_names)
+                    )
                     if expected_shapes is None:
                         expected_shapes = shapes
                     elif shapes != expected_shapes:
                         raise ValueError(f"{path}::{key} observation shapes differ from other selected episodes")
-                    episodes.append(Episode(path, f"data/{key}", length, status))
+                    episodes.append(Episode(path, f"data/{key}", length, status, controlled_indices))
     if not episodes:
         raise ValueError(
             f"No non-empty episodes match statuses={config.statuses}; found statuses={sorted(seen_statuses)}. "
@@ -136,8 +157,14 @@ def split_episodes(episodes, validation_fraction, seed):
     return train, validation
 
 
-def _state(demo, state_keys, index):
-    return np.concatenate([np.asarray(demo[f"obs/{key}"][index], dtype=np.float32).reshape(-1) for key in state_keys])
+def _state(demo, state_keys, index, controlled_joint_indices):
+    values = []
+    for key in state_keys:
+        value = np.asarray(demo[f"obs/{key}"][index], dtype=np.float32).reshape(-1)
+        if key in ("joint_pos", "joint_vel"):
+            value = value[list(controlled_joint_indices)]
+        values.append(value)
+    return np.concatenate(values)
 
 
 def fit_normalizer(episodes, state_keys, epsilon=1e-6):
@@ -146,10 +173,13 @@ def fit_normalizer(episodes, state_keys, epsilon=1e-6):
     for episode in episodes:
         with h5py.File(episode.path, "r") as handle:
             demo = handle[episode.key]
-            states = np.concatenate(
-                [np.asarray(demo[f"obs/{key}"], dtype=np.float64).reshape(episode.length, -1) for key in state_keys],
-                axis=1,
-            )
+            state_parts = []
+            for key in state_keys:
+                value = np.asarray(demo[f"obs/{key}"], dtype=np.float64).reshape(episode.length, -1)
+                if key in ("joint_pos", "joint_vel"):
+                    value = value[:, list(episode.controlled_joint_indices)]
+                state_parts.append(value)
+            states = np.concatenate(state_parts, axis=1)
             actions = np.asarray(demo["actions"], dtype=np.float64)
         state_sum = states.sum(0) if state_sum is None else state_sum + states.sum(0)
         state_sq = np.square(states).sum(0) if state_sq is None else state_sq + np.square(states).sum(0)
@@ -176,7 +206,7 @@ class HDF5ACTDataset(Dataset):
         episode, step = self.samples[index]
         with h5py.File(episode.path, "r") as handle:
             demo = handle[episode.key]
-            state = _state(demo, self.config.state_keys, step)
+            state = _state(demo, self.config.state_keys, step, episode.controlled_joint_indices)
             end = min(step + self.config.chunk_size, episode.length)
             actions = np.asarray(demo["actions"][step:end], dtype=np.float32)
             images = {
@@ -224,5 +254,6 @@ def dataset_manifest(config, train, validation):
         },
         "train_episodes": [episode.identity for episode in train.episodes],
         "validation_episodes": [episode.identity for episode in validation.episodes],
+        "controlled_joint_names": list(ULTRA_ACTION_JOINT_NAMES),
         "file_fingerprints": fingerprints,
     }

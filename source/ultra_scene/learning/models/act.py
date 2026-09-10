@@ -8,7 +8,7 @@ from torch import nn
 
 @dataclass(frozen=True)
 class ACTConfig:
-    state_dim: int = 48
+    state_dim: int = 44
     action_dim: int = 22
     chunk_size: int = 25
     camera_names: tuple[str, ...] = ("head_rgb", "left_wrist_rgb", "right_wrist_rgb")
