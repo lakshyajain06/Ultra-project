@@ -1,0 +1,228 @@
+"""Episode-level splitting and transition windows for Ultra HDF5 data."""
+
+from dataclasses import dataclass
+import json
+from pathlib import Path
+
+import h5py
+import numpy as np
+import torch
+from torch.utils.data import Dataset
+
+ULTRA_ACTION_JOINT_NAMES = (
+    *(f"torso_j{i}" for i in range(1, 7)),
+    *(f"la_j{i}" for i in range(1, 8)), "la_gripper_joint",
+    *(f"ra_j{i}" for i in range(1, 8)), "ra_gripper_joint",
+)
+
+@dataclass(frozen=True)
+class DatasetConfig:
+    paths: tuple[str, ...]
+    chunk_size: int = 25
+    state_keys: tuple[str, ...] = ("joint_pos", "joint_vel")
+    camera_names: tuple[str, ...] = ("head_rgb", "left_wrist_rgb", "right_wrist_rgb")
+    statuses: tuple[str, ...] = ("success",)
+    validation_fraction: float = 0.1
+    seed: int = 0
+
+
+@dataclass(frozen=True)
+class Episode:
+    path: str
+    key: str
+    length: int
+    status: str
+
+    @property
+    def identity(self):
+        return f"{Path(self.path).resolve()}::{self.key}"
+
+
+class Normalizer:
+    """Per-coordinate standardization fitted only on training episodes."""
+
+    def __init__(self, state_mean, state_std, action_mean, action_std):
+        self.state_mean = np.asarray(state_mean, dtype=np.float32)
+        self.state_std = np.asarray(state_std, dtype=np.float32)
+        self.action_mean = np.asarray(action_mean, dtype=np.float32)
+        self.action_std = np.asarray(action_std, dtype=np.float32)
+
+    def normalize_state(self, value):
+        return (value - self.state_mean) / self.state_std
+
+    def normalize_action(self, value):
+        return (value - self.action_mean) / self.action_std
+
+    def denormalize_action(self, value):
+        return value * self.action_std + self.action_mean
+
+    def to_dict(self):
+        return {name: getattr(self, name).tolist() for name in (
+            "state_mean", "state_std", "action_mean", "action_std"
+        )}
+
+    @classmethod
+    def from_dict(cls, value):
+        return cls(**value)
+
+
+def discover_episodes(config: DatasetConfig):
+    episodes = []
+    seen_statuses = set()
+    seen_paths = set()
+    expected_shapes = None
+    for filename in config.paths:
+        path = str(Path(filename).expanduser().resolve())
+        if path in seen_paths:
+            raise ValueError(f"Duplicate dataset path resolves to {path}; refusing train/validation leakage")
+        seen_paths.add(path)
+        with h5py.File(path, "r") as handle:
+            schema_version = int(handle.attrs.get("schema_version", -1))
+            if schema_version not in (4, 5):
+                raise ValueError(f"{path} uses unsupported schema_version={schema_version}; expected 4 or 5")
+            try:
+                metadata = json.loads(handle.attrs["metadata"])
+            except (KeyError, TypeError, json.JSONDecodeError) as error:
+                raise ValueError(f"{path} has missing or invalid JSON metadata") from error
+            action_names = tuple(metadata.get("action_joint_names", ()))
+            if action_names != ULTRA_ACTION_JOINT_NAMES:
+                raise ValueError(f"{path} action_joint_names do not match the canonical Ultra target order")
+            if "data" not in handle:
+                raise ValueError(f"{path} has no /data group")
+            for key, demo in handle["data"].items():
+                status = str(demo.attrs.get("status", "unknown"))
+                seen_statuses.add(status)
+                length = len(demo.get("actions", ()))
+                if status in config.statuses and length:
+                    if demo["actions"].ndim != 2 or demo["actions"].shape[1] != 22:
+                        raise ValueError(
+                            f"{path}::{key}/actions must be [T,22] absolute Ultra targets; "
+                            f"got {demo['actions'].shape}"
+                        )
+                    required = [f"obs/{k}" for k in (*config.state_keys, *config.camera_names)]
+                    missing = [name for name in required if name not in demo]
+                    if missing:
+                        raise KeyError(f"{path}::{key} is missing {missing}")
+                    for name in required:
+                        if len(demo[name]) != length:
+                            raise ValueError(f"{path}::{key}/{name} is not aligned with actions")
+                    for name in config.camera_names:
+                        shape = demo[f"obs/{name}"].shape
+                        if len(shape) != 4 or shape[-1] != 3 or demo[f"obs/{name}"].dtype != np.uint8:
+                            raise ValueError(f"{path}::{key}/obs/{name} must be uint8 [T,H,W,3]; got {shape}")
+                    shapes = tuple(demo[f"obs/{name}"].shape[1:] for name in (*config.state_keys, *config.camera_names))
+                    if expected_shapes is None:
+                        expected_shapes = shapes
+                    elif shapes != expected_shapes:
+                        raise ValueError(f"{path}::{key} observation shapes differ from other selected episodes")
+                    episodes.append(Episode(path, f"data/{key}", length, status))
+    if not episodes:
+        raise ValueError(
+            f"No non-empty episodes match statuses={config.statuses}; found statuses={sorted(seen_statuses)}. "
+            "Use --statuses to deliberately include other labels."
+        )
+    return episodes
+
+
+def split_episodes(episodes, validation_fraction, seed):
+    if not 0 <= validation_fraction < 1:
+        raise ValueError("validation_fraction must be in [0, 1)")
+    order = np.random.default_rng(seed).permutation(len(episodes))
+    count = 0 if validation_fraction == 0 or len(episodes) < 2 else max(1, round(len(episodes) * validation_fraction))
+    count = min(count, len(episodes) - 1)
+    validation_ids = set(order[:count].tolist())
+    train = [episode for index, episode in enumerate(episodes) if index not in validation_ids]
+    validation = [episode for index, episode in enumerate(episodes) if index in validation_ids]
+    return train, validation
+
+
+def _state(demo, state_keys, index):
+    return np.concatenate([np.asarray(demo[f"obs/{key}"][index], dtype=np.float32).reshape(-1) for key in state_keys])
+
+
+def fit_normalizer(episodes, state_keys, epsilon=1e-6):
+    state_sum = state_sq = action_sum = action_sq = None
+    count = 0
+    for episode in episodes:
+        with h5py.File(episode.path, "r") as handle:
+            demo = handle[episode.key]
+            states = np.concatenate(
+                [np.asarray(demo[f"obs/{key}"], dtype=np.float64).reshape(episode.length, -1) for key in state_keys],
+                axis=1,
+            )
+            actions = np.asarray(demo["actions"], dtype=np.float64)
+        state_sum = states.sum(0) if state_sum is None else state_sum + states.sum(0)
+        state_sq = np.square(states).sum(0) if state_sq is None else state_sq + np.square(states).sum(0)
+        action_sum = actions.sum(0) if action_sum is None else action_sum + actions.sum(0)
+        action_sq = np.square(actions).sum(0) if action_sq is None else action_sq + np.square(actions).sum(0)
+        count += episode.length
+    state_mean, action_mean = state_sum / count, action_sum / count
+    state_std = np.sqrt(np.maximum(state_sq / count - state_mean**2, epsilon**2))
+    action_std = np.sqrt(np.maximum(action_sq / count - action_mean**2, epsilon**2))
+    return Normalizer(state_mean, state_std, action_mean, action_std)
+
+
+class HDF5ACTDataset(Dataset):
+    def __init__(self, episodes, config, normalizer):
+        self.episodes = list(episodes)
+        self.config = config
+        self.normalizer = normalizer
+        self.samples = [(episode, step) for episode in self.episodes for step in range(episode.length)]
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, index):
+        episode, step = self.samples[index]
+        with h5py.File(episode.path, "r") as handle:
+            demo = handle[episode.key]
+            state = _state(demo, self.config.state_keys, step)
+            end = min(step + self.config.chunk_size, episode.length)
+            actions = np.asarray(demo["actions"][step:end], dtype=np.float32)
+            images = {
+                name: np.asarray(demo[f"obs/{name}"][step], dtype=np.uint8)
+                for name in self.config.camera_names
+            }
+        valid = len(actions)
+        padded = np.empty((self.config.chunk_size, actions.shape[-1]), dtype=np.float32)
+        padded[:valid] = actions
+        padded[valid:] = actions[-1]  # stable hold target, ignored by the loss
+        is_pad = np.arange(self.config.chunk_size) >= valid
+        image_tensors = {
+            name: torch.from_numpy(value.copy()).permute(2, 0, 1).float().div_(255.0)
+            for name, value in images.items()
+        }
+        return {
+            "state": torch.from_numpy(self.normalizer.normalize_state(state).astype(np.float32)),
+            "images": image_tensors,
+            "actions": torch.from_numpy(self.normalizer.normalize_action(padded).astype(np.float32)),
+            "is_pad": torch.from_numpy(is_pad),
+        }
+
+
+def build_datasets(config: DatasetConfig):
+    episodes = discover_episodes(config)
+    train_episodes, validation_episodes = split_episodes(episodes, config.validation_fraction, config.seed)
+    normalizer = fit_normalizer(train_episodes, config.state_keys)
+    return (
+        HDF5ACTDataset(train_episodes, config, normalizer),
+        HDF5ACTDataset(validation_episodes, config, normalizer),
+        normalizer,
+    )
+
+
+def dataset_manifest(config, train, validation):
+    fingerprints = {}
+    for path in sorted({episode.path for episode in (*train.episodes, *validation.episodes)}):
+        stat = Path(path).stat()
+        fingerprints[path] = {"size": stat.st_size, "mtime_ns": stat.st_mtime_ns}
+    return {
+        "config": {
+            **config.__dict__,
+            "paths": list(config.paths), "state_keys": list(config.state_keys),
+            "camera_names": list(config.camera_names), "statuses": list(config.statuses),
+        },
+        "train_episodes": [episode.identity for episode in train.episodes],
+        "validation_episodes": [episode.identity for episode in validation.episodes],
+        "file_fingerprints": fingerprints,
+    }

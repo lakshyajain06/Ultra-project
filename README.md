@@ -234,6 +234,70 @@ the recorder; only connecting the real Quest can validate tracking alignment,
 buttons, network latency, and headset comfort. Smoke datasets are not training
 demonstrations.
 
+## ACT behavior-cloning training
+
+The learning package contains a compact Action Chunking with Transformers
+(ACT) policy and an HDF5 training pipeline. It runs outside Isaac Sim and uses
+only dependencies already present in the project. By default, each sample uses
+the current 24 joint positions and 24 joint velocities, the head/left-wrist/
+right-wrist RGB frames, and predicts the next 25 absolute 22-joint targets.
+State and action statistics are fitted on the training episodes only and stored
+inside every checkpoint.
+
+Train on one or more collections:
+
+```bash
+uv run python scripts/train_act.py datasets/ultra_001.hdf5 datasets/ultra_002.hdf5 \
+  --output outputs/act/place_cube --epochs 100 --batch-size 16
+```
+
+Only `success` episodes are selected by default. Status selection is explicit;
+for exploratory training on a collection containing only aborted episodes use,
+for example, `--statuses aborted`. Splitting is deterministic and performed by
+episode, preventing transitions from one demonstration leaking across train and
+validation sets. Use `--seed`, `--validation-fraction`, `--chunk-size`,
+`--state-keys`, and `--cameras` to configure the input contract. Cameras can be
+removed independently, including all of them (`--cameras` with no following
+values), without changing the dataset format.
+
+Resume an interrupted run with the same architecture and data arguments:
+
+```bash
+uv run python scripts/train_act.py datasets/ultra_001.hdf5 \
+  --output outputs/act/place_cube --resume outputs/act/place_cube/latest.pt
+```
+
+`latest.pt` and `best.pt` are written at epoch boundaries and contain model and optimizer state, model/training
+configuration, normalization, the exact episode split, counters, and random
+number generator state. File size/mtime fingerprints prevent accidentally
+resuming after an input dataset changed. `manifest.json` makes the split easy to inspect.
+Console JSON reports normalized MAE, aggregate MAE in the recorded action units,
+separate joint-target MAE in radians and jaw-target MAE in metres, KL loss, and
+total loss. The best checkpoint is selected using validation MAE in action units
+(or training MAE when no validation episodes are requested).
+
+For manager-environment integration, pass the same observation dictionary to
+the simulator-independent inference wrapper:
+
+```python
+from ultra_scene.learning.inference import ACTInference
+
+policy = ACTInference.from_checkpoint("outputs/act/place_cube/best.pt", device="cuda")
+action_chunk = policy.predict(observation)  # (chunk_size, 22), absolute targets
+action = action_chunk[0]
+```
+
+The runtime is deliberately separate from the controller: it emits the same
+ordered absolute torso/arm/jaw targets recorded during teleoperation. Executing
+the chunk (first-action receding horizon, temporal ensembling, or a fixed number
+of open-loop steps) remains an environment/controller policy choice.
+
+Run the CPU-only synthetic-data tests with:
+
+```bash
+uv run python -m unittest tests.test_act_training -v
+```
+
 ## Ultra fidelity
 
 The robot is ported from `~/real2sim2real_ws` without changing its articulation
