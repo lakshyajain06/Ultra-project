@@ -134,6 +134,9 @@ class ACTTrainingTests(unittest.TestCase):
         }
         manager_prediction = runner.predict(manager_observation)
         np.testing.assert_allclose(manager_prediction, prediction)
+        torch_observation = {key: torch.from_numpy(value) for key, value in manager_observation.items()}
+        torch_prediction = runner.predict(torch_observation)
+        np.testing.assert_allclose(torch_prediction, manager_prediction)
         with self.assertRaisesRegex(ValueError, "supports one environment"):
             runner.predict({**manager_observation, "proprio": np.repeat(manager_observation["proprio"], 2, axis=0)})
 

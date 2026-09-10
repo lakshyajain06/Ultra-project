@@ -301,6 +301,10 @@ with separate 24-DOF `joint_pos`/`joint_vel`, call
 `policy.predict(observation, observation_joint_names)` so the same
 metadata-driven selection is applied. Batched deployment with `N > 1` is not
 implemented by this wrapper and raises a clear error.
+The wrapper currently stages device-backed observations through CPU NumPy
+before normalized inference. This is a simple, reliable integration path, but
+high-throughput vectorized deployment should use an on-device batched adapter
+to avoid GPU-to-CPU-to-GPU camera copies.
 
 Run the CPU-only synthetic-data tests with:
 

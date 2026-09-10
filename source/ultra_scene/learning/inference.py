@@ -7,6 +7,13 @@ from .models import ACTConfig, ACTPolicy
 from .training.data import Normalizer
 
 
+def _as_numpy(value, dtype):
+    """Convert NumPy-like or device-backed torch observations safely."""
+    if isinstance(value, torch.Tensor):
+        value = value.detach().cpu().numpy()
+    return np.asarray(value, dtype=dtype)
+
+
 class ACTInference:
     """Turn an environment observation into absolute 22-target action chunks."""
 
@@ -34,7 +41,7 @@ class ACTInference:
     def predict(self, observation, observation_joint_names=None):
         """Predict for one manager environment or one named legacy observation."""
         if self.state_keys == ("joint_pos", "joint_vel") and "proprio" in observation:
-            state = np.asarray(observation["proprio"], dtype=np.float32)
+            state = _as_numpy(observation["proprio"], np.float32)
             if state.ndim == 2:
                 if state.shape[0] != 1:
                     raise ValueError(f"ACTInference supports one environment; proprio batch is {state.shape[0]}")
@@ -44,7 +51,7 @@ class ACTInference:
         else:
             values = []
             for key in self.state_keys:
-                value = np.asarray(observation[key], dtype=np.float32)
+                value = _as_numpy(observation[key], np.float32)
                 if key in ("joint_pos", "joint_vel") and value.ndim == 2:
                     if value.shape[0] != 1:
                         raise ValueError(f"ACTInference supports one environment; {key} batch is {value.shape[0]}")
@@ -68,7 +75,7 @@ class ACTInference:
         state = torch.from_numpy(self.normalizer.normalize_state(state).astype(np.float32))[None].to(self.device)
         images = {}
         for name in self.camera_names:
-            image = np.asarray(observation[name], dtype=np.uint8)
+            image = _as_numpy(observation[name], np.uint8)
             if image.ndim == 4:
                 if image.shape[0] != 1:
                     raise ValueError(f"ACTInference supports one environment; {name} batch is {image.shape[0]}")
