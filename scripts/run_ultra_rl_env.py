@@ -75,7 +75,7 @@ def main():
             raise RuntimeError("Stable cube-on-plate placement did not terminate within the smoke run")
         policy = observations["policy"]
         expected = {
-            "proprio": (args.num_envs, 44),
+            "proprio": (args.num_envs, 22),
         }
         if args.vision:
             enabled = CAMERA_STREAMS if args.cameras is None else args.cameras

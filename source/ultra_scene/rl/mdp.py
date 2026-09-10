@@ -6,7 +6,7 @@ import torch
 from isaaclab.envs import ManagerBasedEnv, ManagerBasedRLEnv
 from isaaclab.envs.mdp.actions import JointPositionAction
 from isaaclab.managers import ManagerTermBase, SceneEntityCfg
-from isaaclab.utils.math import quat_apply, quat_apply_inverse, subtract_frame_transforms
+from isaaclab.utils.math import quat_apply, quat_apply_inverse, quat_unique, subtract_frame_transforms
 
 from ultra_scene import ULTRA_CONTROLLED_JOINT_NAMES
 
@@ -41,21 +41,47 @@ def joint_vel(env: ManagerBasedEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("
 
 def proprioception(
     env: ManagerBasedEnv,
-    asset_cfg: SceneEntityCfg = SceneEntityCfg(
-        "robot", joint_names=list(ULTRA_CONTROLLED_JOINT_NAMES), preserve_order=True
+    torso_cfg: SceneEntityCfg = SceneEntityCfg(
+        "robot", joint_names=[f"torso_j{i}" for i in range(1, 7)], preserve_order=True
+    ),
+    eef_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names=["la_gripper", "ra_gripper"], preserve_order=True),
+    body_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names=["fr30_6"]),
+    gripper_cfg: SceneEntityCfg = SceneEntityCfg(
+        "robot", joint_names=["la_gripper_joint", "ra_gripper_joint"], preserve_order=True
     ),
 ) -> torch.Tensor:
-    """Measured position and velocity for the 22 commanded joints.
+    """Return the canonical 22-D deployable Ultra state.
 
-    The order is ``[q(22), qdot(22)]``, with each half following the absolute
-    teleop action order. Passive jaw follower joints are deliberately omitted.
-    Values stay in physical units so demonstration statistics can be shared by
-    behavior-cloning and simulation policies.
+    Order is ``[torso_q(6), left_pose_body(7), left_gripper(1),
+    right_pose_body(7), right_gripper(1)]``. Poses are XYZ plus canonical XYZW
+    quaternion (non-negative W), expressed relative to ``fr30_6``. All values
+    are measured or computed from measurable robot state; no object state is
+    included.
     """
-    robot = env.scene[asset_cfg.name]
-    positions = _tensor(robot.data.joint_pos)[:, asset_cfg.joint_ids]
-    velocities = _tensor(robot.data.joint_vel)[:, asset_cfg.joint_ids]
-    return torch.cat((positions, velocities), dim=-1)
+    robot = env.scene[torso_cfg.name]
+    joint_pos = _tensor(robot.data.joint_pos)
+    body_poses = _tensor(robot.data.body_link_pose_w)
+    reference = body_poses[:, body_cfg.body_ids[0]]
+    eef_poses = []
+    for body_id in eef_cfg.body_ids:
+        target = body_poses[:, body_id]
+        position, quaternion = subtract_frame_transforms(
+            reference[:, :3], reference[:, 3:7], target[:, :3], target[:, 3:7]
+        )
+        quaternion = quaternion / torch.linalg.vector_norm(quaternion, dim=-1, keepdim=True).clamp_min(
+            torch.finfo(quaternion.dtype).eps
+        )
+        eef_poses.append(torch.cat((position, quat_unique(quaternion)), dim=-1))
+    return torch.cat(
+        (
+            joint_pos[:, torso_cfg.joint_ids],
+            eef_poses[0],
+            joint_pos[:, gripper_cfg.joint_ids[0:1]],
+            eef_poses[1],
+            joint_pos[:, gripper_cfg.joint_ids[1:2]],
+        ),
+        dim=-1,
+    )
 
 
 def body_pose(

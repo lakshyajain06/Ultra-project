@@ -91,9 +91,14 @@ class ObservationsCfg:
         proprio = ObsTerm(
             func=mdp.proprioception,
             params={
-                "asset_cfg": SceneEntityCfg(
-                    "robot", joint_names=list(ULTRA_CONTROLLED_JOINT_NAMES), preserve_order=True
-                )
+                "torso_cfg": SceneEntityCfg(
+                    "robot", joint_names=[f"torso_j{i}" for i in range(1, 7)], preserve_order=True
+                ),
+                "eef_cfg": SceneEntityCfg("robot", body_names=["la_gripper", "ra_gripper"], preserve_order=True),
+                "body_cfg": SceneEntityCfg("robot", body_names=["fr30_6"]),
+                "gripper_cfg": SceneEntityCfg(
+                    "robot", joint_names=["la_gripper_joint", "ra_gripper_joint"], preserve_order=True
+                ),
             },
         )
         eef_pose_body = ObsTerm(
@@ -120,9 +125,14 @@ class VisionObservationsCfg(ObservationsCfg):
         proprio = ObsTerm(
             func=mdp.proprioception,
             params={
-                "asset_cfg": SceneEntityCfg(
-                    "robot", joint_names=list(ULTRA_CONTROLLED_JOINT_NAMES), preserve_order=True
-                )
+                "torso_cfg": SceneEntityCfg(
+                    "robot", joint_names=[f"torso_j{i}" for i in range(1, 7)], preserve_order=True
+                ),
+                "eef_cfg": SceneEntityCfg("robot", body_names=["la_gripper", "ra_gripper"], preserve_order=True),
+                "body_cfg": SceneEntityCfg("robot", body_names=["fr30_6"]),
+                "gripper_cfg": SceneEntityCfg(
+                    "robot", joint_names=["la_gripper_joint", "ra_gripper_joint"], preserve_order=True
+                ),
             },
         )
         head_rgb = ObsTerm(func=mdp.camera_rgb, params={"sensor_cfg": SceneEntityCfg("head_camera")})

@@ -244,16 +244,25 @@ torso/arms and metres for the jaws), clipped to the authored joint limits. A
 future ACT controller can therefore emit the same target vector stored in
 `actions` without an environment-side representation change.
 
-The primary proprioceptive observation is a 44-value `proprio` vector:
-`[controlled_joint_position(22), controlled_joint_velocity(22)]`, in exact
-teleop action order. This is preferable to blindly using the recorded 24-DOF
-arrays: the extra two DOFs are passive jaw followers and cannot be commanded.
-Positions provide the actuator state needed by ACT, while velocities expose
-lag/motion direction and make the state Markov under position control. Both are
-directly measurable on hardware, remain in physical units, and can be derived
-from every recorded transition by selecting the metadata's
-`action_joint_names`. End-effector poses are derived kinematics rather than
-proprioceptive sensors, so they are not included in this canonical vector.
+The primary deployable observation is the 22-value `proprio` vector
+`[torso_q(6), left_eef_pose_body(7), left_gripper_q(1),
+right_eef_pose_body(7), right_gripper_q(1)]`. Consequently, slices `0:6`,
+`6:13`, `13`, `14:21`, and `21` have stable meanings. Each end-effector pose is
+XYZ plus XYZW quaternion relative to the shared `fr30_6` body; quaternions are
+normalized by the frame transform and canonicalized to non-negative W so the
+same orientation cannot jump between `q` and `-q`.
+
+This task-space state is a compact fit for ACT and the teleop data: torso angles
+retain the shared body's configuration, body-relative wrist poses remove
+irrelevant world translation and move with that shared body, and the two jaw
+openings retain the grasp state. The slice boundaries also align with the
+teleop action's torso/left/right segments even though actions remain absolute
+joint targets. Every value is hardware-measurable or available through forward
+kinematics and can be derived directly from recorded `joint_pos` and
+`eef_pose_body`; cube/plate truth is deliberately excluded. Arm joint angles,
+passive jaw followers, and joint velocities are not part of the default policy
+input. ACT's observation/action history captures short-term motion, while this
+smaller representation avoids redundant passive and kinematic coordinates.
 
 The state-only environment adds end-effector and cube/plate poses to its policy
 group for oracle-state experiments. The vision environment instead exposes only

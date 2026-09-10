@@ -22,7 +22,10 @@ class ManagerBasedRLConfigTests(unittest.TestCase):
         self.assertEqual(len(cfg.actions.joint_position.joint_names), 22)
         self.assertFalse(cfg.actions.joint_position.use_default_offset)
         self.assertTrue(cfg.actions.joint_position.preserve_order)
-        self.assertEqual(len(cfg.observations.policy.proprio.params["asset_cfg"].joint_names), 22)
+        proprio = cfg.observations.policy.proprio.params
+        self.assertEqual(proprio["torso_cfg"].joint_names, [f"torso_j{i}" for i in range(1, 7)])
+        self.assertEqual(proprio["eef_cfg"].body_names, ["la_gripper", "ra_gripper"])
+        self.assertEqual(proprio["gripper_cfg"].joint_names, ["la_gripper_joint", "ra_gripper_joint"])
 
     def test_registered_state_and_vision_variants(self):
         self.assertEqual(
@@ -123,17 +126,61 @@ class ManagerBasedRLConfigTests(unittest.TestCase):
         env.scene["cube"].data.root_pos_w[0, 0] = 0.2
         self.assertFalse(term(env, hold_steps=3, **kwargs).item())
 
-    def test_proprioception_excludes_passive_followers_in_requested_order(self):
+    def test_proprioception_has_canonical_teleop_task_space_order(self):
         env = SimpleNamespace(
             scene={
                 "robot": _asset(
-                    joint_pos=torch.tensor([[10.0, 20.0, 30.0, 40.0]]),
-                    joint_vel=torch.tensor([[1.0, 2.0, 3.0, 4.0]]),
+                    joint_pos=torch.tensor([[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 0.01, 0.02]]),
+                    body_link_pose_w=torch.tensor(
+                        [
+                            [
+                                [1.0, 2.0, 3.0, 0.0, 0.0, 0.0, 1.0],
+                                [2.0, 2.0, 3.0, 0.0, 0.0, 0.0, -1.0],
+                                [1.0, 4.0, 3.0, 0.0, 0.0, 0.0, 1.0],
+                            ]
+                        ]
+                    ),
                 )
             }
         )
-        cfg = SceneEntityCfg("robot", joint_ids=[2, 0])
-        torch.testing.assert_close(mdp.proprioception(env, cfg), torch.tensor([[30.0, 10.0, 3.0, 1.0]]))
+        proprio = mdp.proprioception(
+            env,
+            torso_cfg=SceneEntityCfg("robot", joint_ids=[0, 1, 2, 3, 4, 5]),
+            eef_cfg=SceneEntityCfg("robot", body_ids=[1, 2]),
+            body_cfg=SceneEntityCfg("robot", body_ids=[0]),
+            gripper_cfg=SceneEntityCfg("robot", joint_ids=[6, 7]),
+        )
+        expected = torch.tensor(
+            [
+                [
+                    1.0,
+                    2.0,
+                    3.0,
+                    4.0,
+                    5.0,
+                    6.0,
+                    1.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0,
+                    0.01,
+                    0.0,
+                    2.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0,
+                    0.02,
+                ]
+            ]
+        )
+        self.assertEqual(proprio.shape, (1, 22))
+        torch.testing.assert_close(proprio, expected)
+        self.assertGreaterEqual(proprio[0, 12].item(), 0.0)
 
 
 if __name__ == "__main__":
