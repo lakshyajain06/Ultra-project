@@ -234,6 +234,69 @@ the recorder; only connecting the real Quest can validate tracking alignment,
 buttons, network latency, and headset comfort. Smoke datasets are not training
 demonstrations.
 
+## Manager-based RL evaluation environment
+
+`UltraCubePlateEnvCfg` provides a vectorized Isaac Lab `ManagerBasedRLEnv` for
+policy evaluation and RL fine-tuning. It preserves the demonstrations' absolute
+22-joint action order, 25 Hz control rate, and 50 Hz physics rate. Actions are
+unscaled absolute position targets in the same units as teleop (radians for the
+torso/arms and metres for the jaws), clipped to the authored joint limits. A
+future ACT controller can therefore emit the same target vector stored in
+`actions` without an environment-side representation change.
+
+The primary proprioceptive observation is a 44-value `proprio` vector:
+`[controlled_joint_position(22), controlled_joint_velocity(22)]`, in exact
+teleop action order. This is preferable to blindly using the recorded 24-DOF
+arrays: the extra two DOFs are passive jaw followers and cannot be commanded.
+Positions provide the actuator state needed by ACT, while velocities expose
+lag/motion direction and make the state Markov under position control. Both are
+directly measurable on hardware, remain in physical units, and can be derived
+from every recorded transition by selecting the metadata's
+`action_joint_names`. End-effector poses are derived kinematics rather than
+proprioceptive sensors, so they are not included in this canonical vector.
+
+The state-only environment adds end-effector and cube/plate poses to its policy
+group for oracle-state experiments. The vision environment instead exposes only
+deployable `proprio` and RGB terms to `policy`; oracle object/kinematic terms are
+isolated in its `critic` group for optional asymmetric RL and should not be fed
+to an ACT policy.
+
+Success is deliberately stricter than center overlap. The cube footprint must
+fit within the circular plate in the plate's local frame, its center must be at
+the face-on-face resting height, the plate must face upward, cube/plate relative
+linear and angular motion must be small, and each gripper must be open or clear
+of the cube. These conditions must hold for five consecutive 25 Hz control
+steps (0.2 seconds). This stable geometric support test is deterministic across
+sleeping/contact-reporting states while still rejecting fly-throughs, edge
+overhangs, carried cubes, and toppled plates. Episodes also end when the cube
+falls below the table or after 120 simulated seconds.
+
+Run a short headless smoke test:
+
+```bash
+uv run --locked python scripts/run_ultra_rl_env.py --viz none --num_envs 4 --steps 10
+
+# Also exercise the stable-placement termination with a known-good placement.
+uv run --locked python scripts/run_ultra_rl_env.py --viz none --steps 10 --check-success
+```
+
+Use `--vision` to select `UltraCubePlateVisionEnvCfg`, which adds float32 HWC
+`head_rgb`, `left_wrist_rgb`, and `right_wrist_rgb` policy observations in the
+same 0..255 value range and at the same default 320x240 resolution as the HDF5
+data. Each attached robot camera is independently optional:
+
+```bash
+# Head and right wrist only, at a smaller resolution.
+uv run --locked python scripts/run_ultra_rl_env.py --viz none --vision \
+  --cameras head_rgb right_wrist_rgb --camera-width 160 --camera-height 120
+```
+
+In Python, pass `enabled_cameras=("head_rgb",)` to
+`UltraCubePlateVisionEnvCfg`, or call `configure_cameras(cfg, streams, width,
+height)` before constructing the environment. An empty stream tuple disables
+all cameras. The vision configuration defaults to one environment because RTX
+cameras are substantially more expensive than state observations.
+
 ## Ultra fidelity
 
 The robot is ported from `~/real2sim2real_ws` without changing its articulation
