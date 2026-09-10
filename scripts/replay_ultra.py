@@ -18,6 +18,7 @@ parser.add_argument("--speed", type=float, default=1.0, help="Playback speed mul
 parser.add_argument("--start-step", type=int, default=0)
 parser.add_argument("--end-step", type=int, help="Exclusive end step")
 parser.add_argument("--hold-seconds", type=float, default=5.0, help="Keep simulating the final pose after playback")
+parser.add_argument("--no-recorded-images", action="store_true", help="Do not show saved camera frames")
 AppLauncher.add_app_launcher_args(parser)
 args = parser.parse_args()
 
@@ -49,6 +50,10 @@ def read_dataset(path, selected=None):
             "success": bool(demo.attrs.get("success", False)),
             "next_joint_pos": demo["next_obs/joint_pos"][...] if "next_obs/joint_pos" in demo else None,
             "next_cube_pose": demo["next_obs/cube_pose"][...] if "next_obs/cube_pose" in demo else None,
+            "image_keys": tuple(
+                key for key in ("head_rgb", "left_wrist_rgb", "right_wrist_rgb")
+                if f"obs/{key}" in demo and f"next_obs/{key}" in demo
+            ),
         }
         return metadata, rows, payload
 
@@ -80,6 +85,53 @@ app = launcher.app
 from ultra_scene.teleop.env import UltraTeleopEnv
 
 
+class RecordedCameraViewer:
+    """Kit window backed by the RGB arrays stored in the demonstration."""
+
+    LABELS = {
+        "head_rgb": "Head",
+        "left_wrist_rgb": "Left wrist",
+        "right_wrist_rgb": "Right wrist",
+    }
+
+    def __init__(self, image_keys):
+        import omni.ui as ui
+
+        self.ui = ui
+        self.window = ui.Window("Recorded camera frames", width=1020, height=330)
+        self.providers = {}
+        with self.window.frame:
+            with ui.VStack(spacing=4):
+                self.status = ui.Label("Recorded sample", height=22)
+                with ui.HStack(spacing=4):
+                    for key in image_keys:
+                        with ui.VStack(spacing=2):
+                            ui.Label(self.LABELS[key], alignment=ui.Alignment.CENTER, height=20)
+                            provider = ui.ByteImageProvider()
+                            self.providers[key] = provider
+                            ui.ImageWithProvider(
+                                provider,
+                                fill_policy=ui.IwpFillPolicy.IWP_PRESERVE_ASPECT_FIT,
+                            )
+
+    def update(self, images, index):
+        self.status.text = f"Recorded sample {index}"
+        for key, rgb in images.items():
+            rgb = np.asarray(rgb, dtype=np.uint8)
+            if rgb.ndim != 3 or rgb.shape[2] not in (3, 4):
+                raise ValueError(f"Recorded {key} must be HWC RGB/RGBA, got {rgb.shape}")
+            if rgb.shape[2] == 3:
+                rgba = np.empty((*rgb.shape[:2], 4), dtype=np.uint8)
+                rgba[..., :3] = rgb
+                rgba[..., 3] = 255
+            else:
+                rgba = np.ascontiguousarray(rgb)
+            self.providers[key].set_data_array(rgba, [rgba.shape[1], rgba.shape[0]])
+
+    def close(self):
+        self.window.destroy()
+
+
 def main():
     env = UltraTeleopEnv(args.device)
     env.restore_initial_state(payload["initial"])
@@ -91,35 +143,51 @@ def main():
         f"({payload['status']}, success={payload['success']})",
         flush=True,
     )
-    # Reconstruct the state at --start-step rather than applying that action
-    # directly to the episode's initial state.
-    for index in range(args.start_step):
-        if not app.is_running():
-            return
-        env.step(actions[index])
-    last = args.start_step - 1
-    for index in range(args.start_step, end):
-        if not app.is_running():
-            break
-        started = time.monotonic()
-        observation, _, _, _, _ = env.step(actions[index])
-        last = index
-        time.sleep(max(0.0, period - (time.monotonic() - started)))
-    if last >= args.start_step:
-        details = []
-        if payload["next_joint_pos"] is not None:
-            details.append(
-                f"joint max error={np.max(np.abs(observation['joint_pos'] - payload['next_joint_pos'][last])):.5f} rad"
-            )
-        if payload["next_cube_pose"] is not None:
-            details.append(
-                f"cube position error={np.linalg.norm(observation['cube_pose'][:3] - payload['next_cube_pose'][last, :3]):.5f} m"
-            )
-        print(f"Reached sample {last}. " + ", ".join(details), flush=True)
-        deadline = time.monotonic() + args.hold_seconds
-        while app.is_running() and time.monotonic() < deadline:
-            env.step(actions[last])
-            time.sleep(env.control_dt)
+    image_keys = () if args.no_recorded_images else payload["image_keys"]
+    if not args.no_recorded_images and not image_keys:
+        print("This episode has no recorded camera frames; replaying simulation only.", flush=True)
+    viewer = RecordedCameraViewer(image_keys) if image_keys else None
+    try:
+        with h5py.File(args.dataset, "r") as file:
+            demo = file[f"data/{selected}"]
+            if viewer:
+                viewer.update({key: demo[f"obs/{key}"][args.start_step] for key in image_keys}, args.start_step)
+            # Reconstruct the state at --start-step rather than applying that
+            # action directly to the episode's initial state.
+            for index in range(args.start_step):
+                if not app.is_running():
+                    return
+                env.step(actions[index])
+            last = args.start_step - 1
+            for index in range(args.start_step, end):
+                if not app.is_running():
+                    break
+                started = time.monotonic()
+                observation, _, _, _, _ = env.step(actions[index])
+                last = index
+                if viewer:
+                    viewer.update({key: demo[f"next_obs/{key}"][index] for key in image_keys}, index)
+                time.sleep(max(0.0, period - (time.monotonic() - started)))
+            if last >= args.start_step:
+                details = []
+                if payload["next_joint_pos"] is not None:
+                    details.append(
+                        "joint max error="
+                        f"{np.max(np.abs(observation['joint_pos'] - payload['next_joint_pos'][last])):.5f} rad"
+                    )
+                if payload["next_cube_pose"] is not None:
+                    details.append(
+                        "cube position error="
+                        f"{np.linalg.norm(observation['cube_pose'][:3] - payload['next_cube_pose'][last, :3]):.5f} m"
+                    )
+                print(f"Reached sample {last}. " + ", ".join(details), flush=True)
+                deadline = time.monotonic() + args.hold_seconds
+                while app.is_running() and time.monotonic() < deadline:
+                    env.step(actions[last])
+                    time.sleep(env.control_dt)
+    finally:
+        if viewer:
+            viewer.close()
 
 
 if __name__ == "__main__":
