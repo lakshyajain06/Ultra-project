@@ -305,6 +305,90 @@ In Python, pass `enabled_cameras=("head_rgb",)` to
 height)` before constructing the environment. An empty stream tuple disables
 all cameras. The vision configuration defaults to one environment because RTX
 cameras are substantially more expensive than state observations.
+## ACT behavior-cloning training
+
+The learning package contains a compact Action Chunking with Transformers
+(ACT) policy and an HDF5 training pipeline. It runs outside Isaac Sim and uses
+only dependencies already present in the project. By default, each sample uses
+the 22D task-centric `proprio` vector, the head/left-wrist/right-wrist RGB frames,
+and predicts the next 25 absolute 22-joint targets. The state order is six torso
+joint angles, left body-relative EEF xyz + XYZW quaternion, left gripper opening,
+right body-relative EEF xyz + XYZW quaternion, and right gripper opening. This
+mirrors the action's torso/left/right grouping while omitting arm angles and
+velocities that are less useful than task-space wrist state for this task.
+The loader uses `observation_joint_names` metadata to select torso and gripper
+positions from legacy 24-DOF recordings and combines them with
+`obs/eef_pose_body`; the two passive jaw followers are never included.
+State and action statistics are fitted on the training episodes only and stored
+inside every checkpoint.
+
+Train on one or more collections:
+
+```bash
+uv run python scripts/train_act.py datasets/ultra_001.hdf5 datasets/ultra_002.hdf5 \
+  --output outputs/act/place_cube --epochs 100 --batch-size 16
+```
+
+Only `success` episodes are selected by default. Status selection is explicit;
+for exploratory training on a collection containing only aborted episodes use,
+for example, `--statuses aborted`. Splitting is deterministic and performed by
+episode, preventing transitions from one demonstration leaking across train and
+validation sets. Use `--seed`, `--validation-fraction`, `--chunk-size`,
+`--state-keys`, and `--cameras` to configure the input contract. The optional
+legacy 44D controlled q/qdot state remains available with
+`--state-keys joint_pos joint_vel`. Cameras can be
+removed independently, including all of them (`--cameras` with no following
+values), without changing the dataset format.
+
+Resume an interrupted run with the same architecture and data arguments:
+
+```bash
+uv run python scripts/train_act.py datasets/ultra_001.hdf5 \
+  --output outputs/act/place_cube --resume outputs/act/place_cube/latest.pt
+```
+
+`latest.pt` and `best.pt` are written at epoch boundaries and contain model and optimizer state, model/training
+configuration, normalization, the exact episode split, counters, and random
+number generator state. File size/mtime fingerprints prevent accidentally
+resuming after an input dataset changed. `manifest.json` makes the split easy to inspect.
+Console JSON reports normalized MAE, aggregate MAE in the recorded action units,
+separate joint-target MAE in radians and jaw-target MAE in metres, KL loss, and
+total loss. The best checkpoint is selected using validation MAE in action units
+(or training MAE when no validation episodes are requested).
+
+For manager-environment integration, pass the same observation dictionary to
+the simulator-independent inference wrapper:
+
+```python
+from ultra_scene.learning.inference import ACTInference
+
+policy = ACTInference.from_checkpoint("outputs/act/place_cube/best.pt", device="cuda")
+action_chunk = policy.predict(observation)  # accepts manager [1,22] proprio and [1,H,W,3] RGB
+action = action_chunk[0]
+```
+
+The runtime is deliberately separate from the controller: it emits the same
+ordered absolute torso/arm/jaw targets recorded during teleoperation. Executing
+the chunk (first-action receding horizon, temporal ensembling, or a fixed number
+of open-loop steps) remains an environment/controller policy choice.
+The manager environment's vision policy dictionary can be passed directly for
+one environment: `proprio` is `[1,22]` in the task-centric order above, and
+camera tensors are `[1,H,W,3]`. Unbatched `[22]` and `[H,W,3]` values are
+accepted too. For a legacy observation with named 24-DOF `joint_pos` and
+`eef_pose_body`, call
+`policy.predict(observation, observation_joint_names)` so the same
+metadata-driven selection is applied. Batched deployment with `N > 1` is not
+implemented by this wrapper and raises a clear error.
+The wrapper currently stages device-backed observations through CPU NumPy
+before normalized inference. This is a simple, reliable integration path, but
+high-throughput vectorized deployment should use an on-device batched adapter
+to avoid GPU-to-CPU-to-GPU camera copies.
+
+Run the CPU-only synthetic-data tests with:
+
+```bash
+uv run python -m unittest tests.test_act_training -v
+```
 
 ## Ultra fidelity
 
