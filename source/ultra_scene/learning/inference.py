@@ -4,7 +4,7 @@ import numpy as np
 import torch
 
 from .models import ACTConfig, ACTPolicy
-from .training.data import Normalizer
+from .training.data import Normalizer, compose_task_state
 
 
 def _as_numpy(value, dtype):
@@ -40,14 +40,44 @@ class ACTInference:
     @torch.inference_mode()
     def predict(self, observation, observation_joint_names=None):
         """Predict for one manager environment or one named legacy observation."""
-        if self.state_keys == ("joint_pos", "joint_vel") and "proprio" in observation:
+        if self.state_keys == ("proprio",) and "proprio" in observation:
             state = _as_numpy(observation["proprio"], np.float32)
             if state.ndim == 2:
                 if state.shape[0] != 1:
                     raise ValueError(f"ACTInference supports one environment; proprio batch is {state.shape[0]}")
                 state = state[0]
-            if state.ndim != 1 or state.size != 2 * len(self.controlled_joint_names):
-                raise ValueError(f"proprio must have shape [44] or [1,44], got {state.shape}")
+            if state.ndim != 1 or state.size != self.model.config.state_dim:
+                raise ValueError(
+                    f"proprio must have shape [{self.model.config.state_dim}] or "
+                    f"[1,{self.model.config.state_dim}], got {state.shape}"
+                )
+        elif self.state_keys == ("proprio",):
+            joint_pos = _as_numpy(observation["joint_pos"], np.float32)
+            if joint_pos.ndim == 2:
+                if joint_pos.shape[0] != 1:
+                    raise ValueError(f"ACTInference supports one environment; joint_pos batch is {joint_pos.shape[0]}")
+                joint_pos = joint_pos[0]
+            joint_pos = joint_pos.reshape(-1)
+            eef_pose = _as_numpy(observation["eef_pose_body"], np.float32)
+            if eef_pose.ndim == 3:
+                if eef_pose.shape[0] != 1:
+                    raise ValueError(f"ACTInference supports one environment; eef_pose_body batch is {eef_pose.shape[0]}")
+                eef_pose = eef_pose[0]
+            if observation_joint_names is None:
+                if joint_pos.size != len(self.controlled_joint_names):
+                    raise ValueError(
+                        f"joint_pos has {joint_pos.size} values; provide observation_joint_names to map legacy state"
+                    )
+                controlled_indices = tuple(range(len(self.controlled_joint_names)))
+            else:
+                names = tuple(observation_joint_names)
+                if len(names) != joint_pos.size or len(set(names)) != len(names):
+                    raise ValueError("observation_joint_names must be unique and match the joint state length")
+                missing = set(self.controlled_joint_names).difference(names)
+                if missing:
+                    raise ValueError(f"observation_joint_names is missing controlled joints: {sorted(missing)}")
+                controlled_indices = tuple(names.index(name) for name in self.controlled_joint_names)
+            state = compose_task_state(joint_pos, eef_pose, controlled_indices)
         else:
             values = []
             for key in self.state_keys:

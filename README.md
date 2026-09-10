@@ -239,10 +239,15 @@ demonstrations.
 The learning package contains a compact Action Chunking with Transformers
 (ACT) policy and an HDF5 training pipeline. It runs outside Isaac Sim and uses
 only dependencies already present in the project. By default, each sample uses
-the 22 controlled joint positions and 22 controlled joint velocities, the head/left-wrist/
-right-wrist RGB frames, and predicts the next 25 absolute 22-joint targets.
-The loader uses `observation_joint_names` metadata to remove the two passive jaw
-followers and reorder legacy 24-DOF recordings into the exact 22-action order.
+the 22D task-centric `proprio` vector, the head/left-wrist/right-wrist RGB frames,
+and predicts the next 25 absolute 22-joint targets. The state order is six torso
+joint angles, left body-relative EEF xyz + XYZW quaternion, left gripper opening,
+right body-relative EEF xyz + XYZW quaternion, and right gripper opening. This
+mirrors the action's torso/left/right grouping while omitting arm angles and
+velocities that are less useful than task-space wrist state for this task.
+The loader uses `observation_joint_names` metadata to select torso and gripper
+positions from legacy 24-DOF recordings and combines them with
+`obs/eef_pose_body`; the two passive jaw followers are never included.
 State and action statistics are fitted on the training episodes only and stored
 inside every checkpoint.
 
@@ -258,7 +263,9 @@ for exploratory training on a collection containing only aborted episodes use,
 for example, `--statuses aborted`. Splitting is deterministic and performed by
 episode, preventing transitions from one demonstration leaking across train and
 validation sets. Use `--seed`, `--validation-fraction`, `--chunk-size`,
-`--state-keys`, and `--cameras` to configure the input contract. Cameras can be
+`--state-keys`, and `--cameras` to configure the input contract. The optional
+legacy 44D controlled q/qdot state remains available with
+`--state-keys joint_pos joint_vel`. Cameras can be
 removed independently, including all of them (`--cameras` with no following
 values), without changing the dataset format.
 
@@ -285,7 +292,7 @@ the simulator-independent inference wrapper:
 from ultra_scene.learning.inference import ACTInference
 
 policy = ACTInference.from_checkpoint("outputs/act/place_cube/best.pt", device="cuda")
-action_chunk = policy.predict(observation)  # accepts manager [1,44] proprio and [1,H,W,3] RGB
+action_chunk = policy.predict(observation)  # accepts manager [1,22] proprio and [1,H,W,3] RGB
 action = action_chunk[0]
 ```
 
@@ -294,10 +301,10 @@ ordered absolute torso/arm/jaw targets recorded during teleoperation. Executing
 the chunk (first-action receding horizon, temporal ensembling, or a fixed number
 of open-loop steps) remains an environment/controller policy choice.
 The manager environment's vision policy dictionary can be passed directly for
-one environment: `proprio` is `[1,44]` (controlled positions followed by
-controlled velocities in action order), and camera tensors are `[1,H,W,3]`.
-Unbatched `[44]` and `[H,W,3]` values are accepted too. For a legacy observation
-with separate 24-DOF `joint_pos`/`joint_vel`, call
+one environment: `proprio` is `[1,22]` in the task-centric order above, and
+camera tensors are `[1,H,W,3]`. Unbatched `[22]` and `[H,W,3]` values are
+accepted too. For a legacy observation with named 24-DOF `joint_pos` and
+`eef_pose_body`, call
 `policy.predict(observation, observation_joint_names)` so the same
 metadata-driven selection is applied. Batched deployment with `N > 1` is not
 implemented by this wrapper and raises a clear error.

@@ -29,7 +29,7 @@ def parser():
     value.add_argument("--chunk-size", type=int, default=25)
     value.add_argument("--validation-fraction", type=float, default=0.1)
     value.add_argument("--statuses", nargs="+", default=["success"])
-    value.add_argument("--state-keys", nargs="+", default=["joint_pos", "joint_vel"])
+    value.add_argument("--state-keys", nargs="+", default=["proprio"])
     value.add_argument("--cameras", nargs="*", default=["head_rgb", "left_wrist_rgb", "right_wrist_rgb"])
     value.add_argument("--hidden-dim", type=int, default=256)
     value.add_argument("--latent-dim", type=int, default=32)

@@ -14,12 +14,19 @@ ULTRA_ACTION_JOINT_NAMES = (
     *(f"la_j{i}" for i in range(1, 8)), "la_gripper_joint",
     *(f"ra_j{i}" for i in range(1, 8)), "ra_gripper_joint",
 )
+TASK_STATE_NAMES = (
+    *(f"torso_j{i}_pos" for i in range(1, 7)),
+    *(f"left_eef_body_{name}" for name in ("x", "y", "z", "qx", "qy", "qz", "qw")),
+    "left_gripper_opening",
+    *(f"right_eef_body_{name}" for name in ("x", "y", "z", "qx", "qy", "qz", "qw")),
+    "right_gripper_opening",
+)
 
 @dataclass(frozen=True)
 class DatasetConfig:
     paths: tuple[str, ...]
     chunk_size: int = 25
-    state_keys: tuple[str, ...] = ("joint_pos", "joint_vel")
+    state_keys: tuple[str, ...] = ("proprio",)
     camera_names: tuple[str, ...] = ("head_rgb", "left_wrist_rgb", "right_wrist_rgb")
     statuses: tuple[str, ...] = ("success",)
     validation_fraction: float = 0.1
@@ -109,7 +116,10 @@ def discover_episodes(config: DatasetConfig):
                             f"{path}::{key}/actions must be [T,22] absolute Ultra targets; "
                             f"got {demo['actions'].shape}"
                         )
-                    required = [f"obs/{k}" for k in (*config.state_keys, *config.camera_names)]
+                    state_datasets = []
+                    for name in config.state_keys:
+                        state_datasets.extend(("joint_pos", "eef_pose_body") if name == "proprio" else (name,))
+                    required = [f"obs/{k}" for k in dict.fromkeys((*state_datasets, *config.camera_names))]
                     missing = [name for name in required if name not in demo]
                     if missing:
                         raise KeyError(f"{path}::{key} is missing {missing}")
@@ -123,12 +133,25 @@ def discover_episodes(config: DatasetConfig):
                                 f"{path}::{key}/obs/{name} must match {len(observation_names)} "
                                 f"observation_joint_names; got {shape}"
                             )
+                    if "proprio" in config.state_keys:
+                        joint_shape = demo["obs/joint_pos"].shape
+                        eef_shape = demo["obs/eef_pose_body"].shape
+                        if len(joint_shape) != 2 or joint_shape[1] != len(observation_names):
+                            raise ValueError(
+                                f"{path}::{key}/obs/joint_pos must match {len(observation_names)} "
+                                f"observation_joint_names; got {joint_shape}"
+                            )
+                        if eef_shape != (length, 2, 7):
+                            raise ValueError(
+                                f"{path}::{key}/obs/eef_pose_body must be [T,2,7]; got {eef_shape}"
+                            )
                     for name in config.camera_names:
                         shape = demo[f"obs/{name}"].shape
                         if len(shape) != 4 or shape[-1] != 3 or demo[f"obs/{name}"].dtype != np.uint8:
                             raise ValueError(f"{path}::{key}/obs/{name} must be uint8 [T,H,W,3]; got {shape}")
                     shapes = tuple(
-                        (len(action_names),) if name in ("joint_pos", "joint_vel")
+                        (len(TASK_STATE_NAMES),) if name == "proprio"
+                        else (len(action_names),) if name in ("joint_pos", "joint_vel")
                         else demo[f"obs/{name}"].shape[1:]
                         for name in (*config.state_keys, *config.camera_names)
                     )
@@ -157,10 +180,32 @@ def split_episodes(episodes, validation_fraction, seed):
     return train, validation
 
 
+def compose_task_state(joint_pos, eef_pose_body, controlled_joint_indices):
+    """Build the canonical 22D task state from a named articulation state."""
+    joint_pos = np.asarray(joint_pos, dtype=np.float32).reshape(-1)
+    eef_pose_body = np.asarray(eef_pose_body, dtype=np.float32)
+    if eef_pose_body.shape != (2, 7):
+        raise ValueError(f"eef_pose_body must have shape [2,7], got {eef_pose_body.shape}")
+    indices = tuple(controlled_joint_indices)
+    if len(indices) != 22 or len(set(indices)) != 22 or max(indices) >= joint_pos.size:
+        raise ValueError("controlled_joint_indices must map all 22 actions into joint_pos")
+    controlled = joint_pos[list(indices)]
+    state = np.concatenate((controlled[:6], eef_pose_body[0], controlled[13:14],
+                            eef_pose_body[1], controlled[21:22]))
+    if state.shape != (22,) or not np.isfinite(state).all():
+        raise ValueError("Task proprioception must contain 22 finite values")
+    return state
+
+
 def _state(demo, state_keys, index, controlled_joint_indices):
     values = []
     for key in state_keys:
-        value = np.asarray(demo[f"obs/{key}"][index], dtype=np.float32).reshape(-1)
+        if key == "proprio":
+            value = compose_task_state(
+                demo["obs/joint_pos"][index], demo["obs/eef_pose_body"][index], controlled_joint_indices,
+            )
+        else:
+            value = np.asarray(demo[f"obs/{key}"][index], dtype=np.float32).reshape(-1)
         if key in ("joint_pos", "joint_vel"):
             value = value[list(controlled_joint_indices)]
         values.append(value)
@@ -175,7 +220,16 @@ def fit_normalizer(episodes, state_keys, epsilon=1e-6):
             demo = handle[episode.key]
             state_parts = []
             for key in state_keys:
-                value = np.asarray(demo[f"obs/{key}"], dtype=np.float64).reshape(episode.length, -1)
+                if key == "proprio":
+                    value = np.stack([
+                        compose_task_state(
+                            demo["obs/joint_pos"][index], demo["obs/eef_pose_body"][index],
+                            episode.controlled_joint_indices,
+                        )
+                        for index in range(episode.length)
+                    ]).astype(np.float64)
+                else:
+                    value = np.asarray(demo[f"obs/{key}"], dtype=np.float64).reshape(episode.length, -1)
                 if key in ("joint_pos", "joint_vel"):
                     value = value[:, list(episode.controlled_joint_indices)]
                 state_parts.append(value)
@@ -255,5 +309,6 @@ def dataset_manifest(config, train, validation):
         "train_episodes": [episode.identity for episode in train.episodes],
         "validation_episodes": [episode.identity for episode in validation.episodes],
         "controlled_joint_names": list(ULTRA_ACTION_JOINT_NAMES),
+        "state_layout": list(TASK_STATE_NAMES) if config.state_keys == ("proprio",) else None,
         "file_fingerprints": fingerprints,
     }
