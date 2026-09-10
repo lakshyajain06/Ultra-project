@@ -124,6 +124,18 @@ class ACTTrainingTests(unittest.TestCase):
         prediction = runner.predict(observation, observation_names)
         self.assertEqual(prediction.shape, (3, 22))
         self.assertTrue(np.isfinite(prediction).all())
+        controlled_indices = [observation_names.index(name) for name in runner.controlled_joint_names]
+        manager_observation = {
+            "proprio": np.concatenate((
+                observation["joint_pos"][controlled_indices],
+                observation["joint_vel"][controlled_indices],
+            ))[None],
+            **{name: observation[name][None] for name in CAMERAS},
+        }
+        manager_prediction = runner.predict(manager_observation)
+        np.testing.assert_allclose(manager_prediction, prediction)
+        with self.assertRaisesRegex(ValueError, "supports one environment"):
+            runner.predict({**manager_observation, "proprio": np.repeat(manager_observation["proprio"], 2, axis=0)})
 
 
 if __name__ == "__main__":

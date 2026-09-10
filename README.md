@@ -285,7 +285,7 @@ the simulator-independent inference wrapper:
 from ultra_scene.learning.inference import ACTInference
 
 policy = ACTInference.from_checkpoint("outputs/act/place_cube/best.pt", device="cuda")
-action_chunk = policy.predict(observation)  # (chunk_size, 22), absolute targets
+action_chunk = policy.predict(observation)  # accepts manager [1,44] proprio and [1,H,W,3] RGB
 action = action_chunk[0]
 ```
 
@@ -293,10 +293,14 @@ The runtime is deliberately separate from the controller: it emits the same
 ordered absolute torso/arm/jaw targets recorded during teleoperation. Executing
 the chunk (first-action receding horizon, temporal ensembling, or a fixed number
 of open-loop steps) remains an environment/controller policy choice.
-Manager-environment observations should expose 22 controlled `joint_pos` and
-22 controlled `joint_vel` values in action order. For a legacy 24-DOF runtime
-observation, call `policy.predict(observation, observation_joint_names)` so the
-same metadata-driven selection is applied.
+The manager environment's vision policy dictionary can be passed directly for
+one environment: `proprio` is `[1,44]` (controlled positions followed by
+controlled velocities in action order), and camera tensors are `[1,H,W,3]`.
+Unbatched `[44]` and `[H,W,3]` values are accepted too. For a legacy observation
+with separate 24-DOF `joint_pos`/`joint_vel`, call
+`policy.predict(observation, observation_joint_names)` so the same
+metadata-driven selection is applied. Batched deployment with `N > 1` is not
+implemented by this wrapper and raises a clear error.
 
 Run the CPU-only synthetic-data tests with:
 
