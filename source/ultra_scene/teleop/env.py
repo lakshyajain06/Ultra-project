@@ -91,6 +91,27 @@ class UltraTeleopEnv(gym.Env):
         self.elapsed = 0.0
         return self.observe(), {}
 
+    def restore_initial_state(self, state):
+        """Restore the complete recorded state used to begin a demonstration."""
+        required = {"joint_pos", "joint_vel", "cube_pose", "cube_velocity", "plate_pose", "plate_velocity"}
+        missing = required.difference(state)
+        if missing:
+            raise KeyError(f"Recorded initial state is missing: {sorted(missing)}")
+        device = self.controller.target.device
+        joint_pos = torch.as_tensor(state["joint_pos"], device=device, dtype=self.controller.target.dtype)[None]
+        joint_vel = torch.as_tensor(state["joint_vel"], device=device, dtype=self.controller.target.dtype)[None]
+        self.robot.write_joint_state_to_sim_index(position=joint_pos, velocity=joint_vel)
+        self.controller.set_target(joint_pos[:, self.controller.joint_ids])
+        for name in ("cube", "plate"):
+            obj = self.scene[name]
+            pose = torch.as_tensor(state[f"{name}_pose"], device=device, dtype=joint_pos.dtype)[None]
+            velocity = torch.as_tensor(state[f"{name}_velocity"], device=device, dtype=joint_pos.dtype)[None]
+            obj.write_root_pose_to_sim_index(root_pose=pose)
+            obj.write_root_velocity_to_sim_index(root_velocity=velocity)
+        self.scene.reset()
+        self.elapsed = 0.0
+        return self.observe()
+
     def ik_action(self, targets_control, grippers, body_target, move_body=False):
         action = self.controller.target.clone()
         observation = self.observe()
