@@ -6,16 +6,30 @@ from scipy.spatial.transform import Rotation
 
 
 class ClutchMapper:
-    def __init__(self, scale=1.0, rotation_offset_deg=(0.0, 0.0, 0.0)):
+    def __init__(self, scale=1.0, rotation_offset_deg=None):
         self.scale = scale
-        # Post-multiplied, so this is a fixed transform in controller-local XYZ.
-        self.rotation_offset = Rotation.from_euler("xyz", rotation_offset_deg, degrees=True)
+        # A supplied offset is fixed in controller-local XYZ. Otherwise each
+        # hand calibrates once against the current robot wrist orientation.
+        configured = None if rotation_offset_deg is None else Rotation.from_euler(
+            "xyz", rotation_offset_deg, degrees=True,
+        )
+        self.rotation_offsets = [configured, configured]
         self.reset()
 
-    def reset(self, grippers=None):
+    def reset(self, grippers=None, recalibrate_orientation=False):
         self.anchor = [None, None]
         self.target = None
         self.grippers = np.full(2, 0.045) if grippers is None else np.asarray(grippers).copy()
+        if recalibrate_orientation:
+            self.rotation_offsets = [None, None]
+
+    def rotation_offsets_xyzw(self):
+        """Return per-controller calibration quaternions, or NaNs until valid."""
+        values = np.full((2, 4), np.nan, dtype=np.float32)
+        for i, offset in enumerate(self.rotation_offsets):
+            if offset is not None:
+                values[i] = offset.as_quat()
+        return values
 
     def update(self, packet, measured, dt, active=True, reference_pose=None):
         """Re-anchor on every engagement; releasing or losing tracking holds position.
@@ -32,6 +46,13 @@ class ClutchMapper:
                 self.anchor[i] = None
                 self.armed[i] = False
                 continue
+            if self.rotation_offsets[i] is None:
+                reference_rot = (
+                    Rotation.identity() if reference_pose is None
+                    else Rotation.from_quat(reference_pose[3:7])
+                )
+                measured_world = reference_rot * Rotation.from_quat(measured[i, 3:7])
+                self.rotation_offsets[i] = Rotation.from_quat(row[3:7]).inv() * measured_world
             if row[8] < 0.5:
                 self.anchor[i] = None
                 self.armed[i] = True
@@ -40,7 +61,10 @@ class ClutchMapper:
                 continue
             if self.anchor[i] is None:
                 # Use held target, so re-clutching cannot snap to a different wrist pose.
-                reference_rot = Rotation.identity() if reference_pose is None else Rotation.from_quat(reference_pose[3:7])
+                reference_rot = (
+                    Rotation.identity() if reference_pose is None
+                    else Rotation.from_quat(reference_pose[3:7])
+                )
                 self.anchor[i] = (row[:7].copy(), self.target[i].copy(), reference_rot)
             hand0, wrist0, reference_rot = self.anchor[i]
             # Translation is clutched and body-relative. Orientation is not
@@ -49,7 +73,7 @@ class ClutchMapper:
             hand_delta = reference_rot.inv().apply(row[:3] - hand0[:3])
             self.target[i, :3] = wrist0[:3] + self.scale * hand_delta
             self.target[i, 3:7] = (
-                Rotation.from_quat(row[3:7]) * self.rotation_offset
+                Rotation.from_quat(row[3:7]) * self.rotation_offsets[i]
             ).as_quat()
             desired_grip = 0.045 * (1.0 - np.clip(row[7], 0.0, 1.0))
             self.grippers[i] += np.clip(desired_grip - self.grippers[i], -0.08 * dt, 0.08 * dt)

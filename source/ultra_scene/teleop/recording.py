@@ -17,7 +17,7 @@ class EpisodeRecorder:
     def __init__(self, path, metadata):
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         self.file = h5py.File(path, "x")  # Never replace an existing dataset.
-        self.file.attrs["schema_version"] = 4
+        self.file.attrs["schema_version"] = 5
         self.file.attrs["metadata"] = json.dumps(metadata)
         self.data = self.file.create_group("data")
         self.episode = None
@@ -32,9 +32,11 @@ class EpisodeRecorder:
             self.episode.create_dataset(f"initial_state/{key}", data=value, **_storage_kwargs(key))
         self.file.flush()
 
-    def append(self, obs, action, next_obs, packet, targets, wall_time, sim_time):
+    def append(self, obs, action, next_obs, packet, targets, wall_time, sim_time, controller_rotation_offsets=None):
         values = {"actions": action, "quest": packet, "eef_targets": targets,
                   "wall_time": wall_time, "sim_time": sim_time}
+        if controller_rotation_offsets is not None:
+            values["controller_rotation_offsets"] = controller_rotation_offsets
         values.update({f"obs/{k}": v for k, v in obs.items()})
         values.update({f"next_obs/{k}": v for k, v in next_obs.items()})
         for key, value in values.items():

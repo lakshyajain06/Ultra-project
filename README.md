@@ -138,10 +138,12 @@ Release both grips once after connecting. Each subsequent grip press anchors
 that controller's **translation** to its current robot target, so physical hand
 placement does not teleport the wrist. Wrist orientation is absolute: while
 clutched, it directly uses the controller's world orientation, and re-gripping
-does not create a new clutch rotation offset. A fixed 90-degree controller-local
-Z tool alignment removes the Quest-to-gripper wrist-roll mismatch; override it
-with `--tool_rotation_offset X Y Z` (degrees), using `0 0 -90` if the roll is
-opposite on your runtime. Tracking loss or pause requires releasing
+does not create a new clutch rotation offset. On initial valid tracking, each
+controller learns one fixed controller-to-tool transform that preserves the
+current robot wrist orientation. Hold the controllers comfortably before
+connecting; right-stick click recalibrates this transform without changing the
+absolute mapping. `--tool_rotation_offset X Y Z` can instead provide an explicit
+fixed local-axis transform in degrees. Tracking loss or pause requires releasing
 the affected grip before moving again. Orientations use XYZW quaternions.
 Translation scale defaults to 1.0 (`--scale`);
 the two controllers solve only their corresponding seven-joint arms. The
@@ -189,6 +191,8 @@ Isaac Lab Mimic or LeRobot's dataset schema. Each `data/demo_XXXXXX` contains:
 - `quest`: the two world-frame controller records, including validity and buttons;
 - `eef_targets`: positions in the shared-body frame and absolute world-frame
   orientations, plus wall-clock and simulated timestamps;
+- `controller_rotation_offsets`: the per-step fixed controller-to-tool XYZW
+  calibration used for reproducible absolute wrist targets;
 - `initial_state`, `status`, `success`, and `num_samples`.
 
 Dataset metadata includes joint names, action units, quaternion convention,

@@ -18,8 +18,8 @@ parser.add_argument("--steps", type=int, default=0, help="Stop after N control s
 parser.add_argument("--seed", type=int, default=0)
 parser.add_argument("--scale", type=float, default=1.0, help="Controller-to-wrist translation scale")
 parser.add_argument(
-    "--tool_rotation_offset", nargs=3, type=float, default=(0.0, 0.0, 90.0), metavar=("X", "Y", "Z"),
-    help="Fixed controller-local XYZ tool rotation in degrees (default: 0 0 90)",
+    "--tool_rotation_offset", nargs=3, type=float, metavar=("X", "Y", "Z"),
+    help="Optional fixed controller-local XYZ tool rotation; default calibrates from the initial wrist pose",
 )
 parser.add_argument("--episode_seconds", type=float, default=120.0)
 parser.add_argument("--camera_width", type=int, default=320)
@@ -80,6 +80,7 @@ def main():
         "camera_streams": ["head_rgb", "left_wrist_rgb", "right_wrist_rgb"],
         "camera_encoding": "uint8 RGB, HWC, lossless HDF5 LZF",
         "camera_width": args.camera_width, "camera_height": args.camera_height,
+        "orientation_calibration": "per-controller fixed transform; initial tracking or right-stick recalibration",
         "anchor_pos": args.anchor_pos, "anchor_yaw_deg": args.anchor_yaw, "synthetic": args.smoke,
         "success_label": "operator supplied; synthetic smoke episodes are never successes",
     }
@@ -115,7 +116,8 @@ def main():
                 if args.dataset else "Camera recording is disabled without --dataset."
             )
             print("Quest: open the release-1.4.x CloudXR client; enter host IP and Connect.\n"
-                  "Release grips, then hold a grip to move that arm. Triggers control jaws.\n"
+                  "Hold controllers comfortably and release grips; initial tracking calibrates wrist alignment.\n"
+                  "Then hold a grip to move that arm. Triggers control jaws.\n"
                   "Left stick moves the shared body in the table plane; right stick controls body yaw/height.\n"
                   "X: save success/reset | Y: abort/reset | B: pause | right stick: recalibrate.\n"
                   f"A is reserved by Isaac Lab. {camera_status}", flush=True)
@@ -147,7 +149,9 @@ def main():
                 paused = not paused
                 print(f"Paused: {paused}", flush=True)
             if rising[1, 2]:
-                mapper.reset(grippers=numpy(env.controller.target)[0, [13, 21]])
+                mapper.reset(
+                    grippers=numpy(env.controller.target)[0, [13, 21]], recalibrate_orientation=True,
+                )
             timed_out = recording and env.elapsed >= args.episode_seconds
             if rising[0, 0] or rising[0, 1] or reset_requested or timed_out:
                 status = ("aborted" if rising[0, 1] or reset_requested else
@@ -170,7 +174,9 @@ def main():
             engaged = arm_active or body_active
             if engaged and not recording:
                 if recorder:
-                    recorder.begin(env.initial_state())
+                    initial_state = env.initial_state()
+                    initial_state["controller_rotation_offsets"] = mapper.rotation_offsets_xyzw()
+                    recorder.begin(initial_state)
                 recording = True
                 env.elapsed = 0.0
             # When paused/disconnected/clutched out, keep last motor targets exactly.
@@ -182,7 +188,10 @@ def main():
                     action[start:start + 8] = numpy(env.controller.target)[0, start:start + 8]
             next_obs, _, _, _, _ = env.step(action)
             if recording and recorder:
-                recorder.append(obs, action, next_obs, packet, targets, time.time(), env.elapsed)
+                recorder.append(
+                    obs, action, next_obs, packet, targets, time.time(), env.elapsed,
+                    mapper.rotation_offsets_xyzw(),
+                )
             obs = next_obs
             max_motion = np.maximum(max_motion, np.linalg.norm(obs["eef_pose"][:, :3] - start_pose[:, :3], axis=1))
             rotation = (

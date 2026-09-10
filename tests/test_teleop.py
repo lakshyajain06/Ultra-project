@@ -18,7 +18,7 @@ class TeleopTests(unittest.TestCase):
         self.packet = np.zeros((2, 15), dtype=np.float32)
         self.packet[:, :7] = self.pose
         self.packet[:, 9] = 1
-        self.mapper = ClutchMapper(scale=1)
+        self.mapper = ClutchMapper(scale=1, rotation_offset_deg=(0, 0, 0))
 
     def engage(self):
         self.mapper.update(self.packet, self.pose, 0.04)
@@ -117,6 +117,28 @@ class TeleopTests(unittest.TestCase):
             [[0, 0, np.pi / 2], [0, 0, np.pi / 2]], atol=1e-6,
         )
 
+    def test_initial_orientation_calibration_is_fixed_across_reclutch(self):
+        mapper = ClutchMapper()
+        measured = self.pose.copy()
+        measured[:, 3:7] = Rotation.from_euler("x", 45, degrees=True).as_quat()
+        mapper.update(self.packet, measured, 0.04)
+        np.testing.assert_allclose(
+            Rotation.from_quat(mapper.rotation_offsets_xyzw()).as_rotvec(),
+            [[np.pi / 4, 0, 0], [np.pi / 4, 0, 0]], atol=1e-6,
+        )
+        self.packet[:, 8] = 1
+        target, _ = mapper.update(self.packet, measured, 0.04)
+        np.testing.assert_allclose(target[:, 3:7], measured[:, 3:7], atol=1e-6)
+        self.packet[:, 8] = 0
+        mapper.update(self.packet, measured, 0.04)
+        self.packet[:, 3:7] = Rotation.from_euler("z", 30, degrees=True).as_quat()
+        self.packet[:, 8] = 1
+        target, _ = mapper.update(self.packet, measured, 0.04)
+        expected = (
+            Rotation.from_euler("z", 30, degrees=True) * Rotation.from_euler("x", 45, degrees=True)
+        ).as_quat()
+        np.testing.assert_allclose(target[:, 3:7], np.tile(expected, (2, 1)), atol=1e-6)
+
     def test_body_relative_target_moves_with_body(self):
         body0 = np.array([0, 0, 0, 0, 0, 0, 1], dtype=np.float32)
         wrist_world0 = np.array([0.2, -0.4, 0.1, 0, 0, 0, 1], dtype=np.float32)
@@ -130,15 +152,16 @@ class TeleopTests(unittest.TestCase):
             path = Path(directory) / "demos.hdf5"
             recorder = EpisodeRecorder(path, {"test": True})
             image = np.arange(4 * 5 * 3, dtype=np.uint8).reshape(4, 5, 3)
+            offsets = np.tile([0, 0, 0, 1], (2, 1))
             recorder.begin({"joint_pos": np.zeros(24), "head_rgb": image})
             recorder.append({"joint_pos": np.zeros(24), "head_rgb": image}, np.ones(22),
                             {"joint_pos": np.ones(24), "head_rgb": image},
-                            self.packet, self.pose, 10.0, 0.04)
+                            self.packet, self.pose, 10.0, 0.04, offsets)
             recorder.finish("success")
             recorder.begin({"joint_pos": np.ones(24), "head_rgb": image})
             recorder.close()
             with h5py.File(path) as file:
-                self.assertEqual(file.attrs["schema_version"], 4)
+                self.assertEqual(file.attrs["schema_version"], 5)
                 demo = file["data/demo_000000"]
                 self.assertEqual(demo["actions"].shape, (1, 22))
                 self.assertEqual(demo["obs/joint_pos"][0, 0], 0)
@@ -146,6 +169,7 @@ class TeleopTests(unittest.TestCase):
                 np.testing.assert_array_equal(demo["obs/head_rgb"][0], image)
                 self.assertEqual(demo["obs/head_rgb"].compression, "lzf")
                 self.assertEqual(demo["initial_state/head_rgb"].compression, "lzf")
+                np.testing.assert_array_equal(demo["controller_rotation_offsets"][0], offsets)
                 self.assertTrue(demo.attrs["success"])
                 self.assertEqual(file["data/demo_000001"].attrs["status"], "interrupted")
             with self.assertRaises(FileExistsError):
