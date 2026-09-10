@@ -22,12 +22,16 @@ parser.add_argument(
     help="Fixed controller-local XYZ tool rotation in degrees (default: 0 0 90)",
 )
 parser.add_argument("--episode_seconds", type=float, default=120.0)
+parser.add_argument("--camera_width", type=int, default=320)
+parser.add_argument("--camera_height", type=int, default=240)
 parser.add_argument("--anchor_pos", nargs=3, type=float, default=(0.0, 1.8, 0.0))
 parser.add_argument("--anchor_yaw", type=float, default=0.0, help="Rotate the XR view about world Z, in degrees")
 AppLauncher.add_app_launcher_args(parser)
 args = parser.parse_args()
 if min(args.scale, args.episode_seconds) <= 0 or args.steps < 0:
     parser.error("scale and episode_seconds must be positive; steps must be nonnegative")
+if min(args.camera_width, args.camera_height) <= 0:
+    parser.error("camera dimensions must be positive")
 if args.dataset and args.dataset.exists():
     parser.error(f"Dataset already exists: {args.dataset}; choose a new path")
 if not args.smoke:
@@ -35,6 +39,7 @@ if not args.smoke:
     version("isaacteleop")  # Fail before launching Kit when --extra teleop was omitted.
 elif not args.steps:
     args.steps = 50
+args.enable_cameras = bool(args.dataset or args.smoke)
 launcher = AppLauncher(args)
 app = launcher.app
 
@@ -47,7 +52,10 @@ from ultra_scene.robots.ultra.ultra_cfg import ULTRA_USD, REPO_ROOT
 
 
 def main():
-    env = UltraTeleopEnv(args.device)
+    env = UltraTeleopEnv(
+        args.device, enable_cameras=args.enable_cameras,
+        camera_width=args.camera_width, camera_height=args.camera_height,
+    )
     obs, _ = env.reset(seed=args.seed)
     mapper = ClutchMapper(scale=args.scale, rotation_offset_deg=args.tool_rotation_offset)
     body_mapper = BodyTargetMapper()
@@ -69,6 +77,9 @@ def main():
         "created_utc": datetime.now(timezone.utc).isoformat(),
         "scale": args.scale,
         "tool_rotation_offset_xyz_deg": args.tool_rotation_offset,
+        "camera_streams": ["head_rgb", "left_wrist_rgb", "right_wrist_rgb"],
+        "camera_encoding": "uint8 RGB, HWC, lossless HDF5 LZF",
+        "camera_width": args.camera_width, "camera_height": args.camera_height,
         "anchor_pos": args.anchor_pos, "anchor_yaw_deg": args.anchor_yaw, "synthetic": args.smoke,
         "success_label": "operator supplied; synthetic smoke episodes are never successes",
     }
@@ -99,11 +110,15 @@ def main():
                 retargeting_execution=RetargetingExecutionConfig(mode="sync"),
             )
             teleop = stack.enter_context(create_isaac_teleop_device(cfg, cloudxr_env_file=CLOUDXR_JS_ENV))
+            camera_status = (
+                "Head and both wrist RGB cameras are recorded."
+                if args.dataset else "Camera recording is disabled without --dataset."
+            )
             print("Quest: open the release-1.4.x CloudXR client; enter host IP and Connect.\n"
                   "Release grips, then hold a grip to move that arm. Triggers control jaws.\n"
                   "Left stick moves the shared body in the table plane; right stick controls body yaw/height.\n"
                   "X: save success/reset | Y: abort/reset | B: pause | right stick: recalibrate.\n"
-                  "A is reserved by Isaac Lab. Camera sensors are disabled.", flush=True)
+                  f"A is reserved by Isaac Lab. {camera_status}", flush=True)
         while app.is_running() and (not args.steps or step < args.steps):
             started = time.monotonic()
             active = True
@@ -183,6 +198,13 @@ def main():
                 recorder.finish("synthetic")
             if not np.isfinite(obs["joint_pos"]).all():
                 raise RuntimeError("Nonfinite joint state in smoke test")
+            for key in ("head_rgb", "left_wrist_rgb", "right_wrist_rgb"):
+                frame = obs[key]
+                expected = (args.camera_height, args.camera_width, 3)
+                if frame.shape != expected or frame.dtype != np.uint8 or np.ptp(frame) < 10:
+                    raise RuntimeError(
+                        f"Invalid {key} frame: shape={frame.shape}, dtype={frame.dtype}, range={np.ptp(frame)}"
+                    )
             if args.steps >= 20 and np.any(max_motion < 0.001):
                 raise RuntimeError(f"Both wrists must move in smoke test: {max_motion}")
             if args.steps >= 20 and np.any(max_rotation < 0.01):

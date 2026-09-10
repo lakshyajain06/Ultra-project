@@ -129,17 +129,23 @@ class TeleopTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "demos.hdf5"
             recorder = EpisodeRecorder(path, {"test": True})
-            recorder.begin({"joint_pos": np.zeros(24)})
-            recorder.append({"joint_pos": np.zeros(24)}, np.ones(22),
-                            {"joint_pos": np.ones(24)}, self.packet, self.pose, 10.0, 0.04)
+            image = np.arange(4 * 5 * 3, dtype=np.uint8).reshape(4, 5, 3)
+            recorder.begin({"joint_pos": np.zeros(24), "head_rgb": image})
+            recorder.append({"joint_pos": np.zeros(24), "head_rgb": image}, np.ones(22),
+                            {"joint_pos": np.ones(24), "head_rgb": image},
+                            self.packet, self.pose, 10.0, 0.04)
             recorder.finish("success")
-            recorder.begin({"joint_pos": np.ones(24)})
+            recorder.begin({"joint_pos": np.ones(24), "head_rgb": image})
             recorder.close()
             with h5py.File(path) as file:
+                self.assertEqual(file.attrs["schema_version"], 4)
                 demo = file["data/demo_000000"]
                 self.assertEqual(demo["actions"].shape, (1, 22))
                 self.assertEqual(demo["obs/joint_pos"][0, 0], 0)
                 self.assertEqual(demo["next_obs/joint_pos"][0, 0], 1)
+                np.testing.assert_array_equal(demo["obs/head_rgb"][0], image)
+                self.assertEqual(demo["obs/head_rgb"].compression, "lzf")
+                self.assertEqual(demo["initial_state/head_rgb"].compression, "lzf")
                 self.assertTrue(demo.attrs["success"])
                 self.assertEqual(file["data/demo_000001"].attrs["status"], "interrupted")
             with self.assertRaises(FileExistsError):

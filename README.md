@@ -106,7 +106,12 @@ uv run --locked --extra teleop python scripts/teleop_ultra.py \
 The runner enables XR automatically. In the Kit XR panel select OpenXR /
 System OpenXR Runtime and click Start XR if it is not already running.
 `--viz none` skips the desktop viewer and uses the headset's immersive view.
-There are no camera sensors or camera-feed panels in this version.
+When `--dataset` is present, the collector enables the authored Ultra head
+camera (`zed_left`) and both wrist cameras and records synchronized RGB frames.
+The default resolution is 320x240; use `--camera_width` and `--camera_height`
+to change it. These dataset cameras are independent of the headset view. At the
+default resolution, budget roughly 1 GB per recorded minute depending on image
+content; HDF5 datasets remain excluded from Git.
 
 In the Quest browser, open the matching [CloudXR 1.4 web client](https://nvidia.github.io/IsaacTeleop/client/release-1.4.x),
 enter the workstation's LAN IP, follow its certificate link to
@@ -176,7 +181,8 @@ The local HDF5 schema is versioned; it is not a claim of compatibility with
 Isaac Lab Mimic or LeRobot's dataset schema. Each `data/demo_XXXXXX` contains:
 
 - `obs` and `next_obs`: all 24 joint positions/velocities, both palm poses,
-  cube pose and plate pose, paired before/after the action;
+  cube pose and plate pose, plus synchronized `head_rgb`, `left_wrist_rgb`, and
+  `right_wrist_rgb` uint8 images paired before/after the action;
 - `actions`: the executed 22 joint-position targets, ordered torso[6], left
   arm[7], left jaw[1], right arm[7], right jaw[1]; torso/arms use radians and
   jaws use **metres** (0 closed, 0.045 open);
@@ -186,9 +192,10 @@ Isaac Lab Mimic or LeRobot's dataset schema. Each `data/demo_XXXXXX` contains:
 - `initial_state`, `status`, `success`, and `num_samples`.
 
 Dataset metadata includes joint names, action units, quaternion convention,
-tool rotation offset, task text, seed, control rate, package versions, and hashes of the robot asset
-and lockfile. Transitions are flushed incrementally, and existing dataset paths
-are refused. No images are recorded yet.
+tool rotation offset, task text, seed, control rate, package versions, and hashes
+of the robot asset and lockfile. RGB arrays use HWC layout and fast lossless HDF5
+LZF compression. Transitions are flushed incrementally, and existing dataset
+paths are refused.
 
 ### Replay demonstrations
 

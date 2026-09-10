@@ -5,6 +5,7 @@ import numpy as np
 import torch
 import isaaclab.sim as sim_utils
 from isaaclab.scene import InteractiveScene
+from isaaclab.sensors import CameraCfg
 from isaaclab.sim import SimulationContext
 
 from ultra_scene import UltraJointPositionController, UltraTabletopSceneCfg
@@ -20,17 +21,39 @@ class UltraTeleopEnv(gym.Env):
     """22 joint position actions: radians for torso/arms, metres for jaws.
 
     Two 50 Hz physics steps per 25 Hz action. Episode labels are operator supplied.
-    This deliberately has no camera sensors or autonomous success predicate yet.
+    Camera observations are optional; there is no autonomous success predicate.
     """
 
     metadata = {"render_modes": []}
     control_dt = 0.04
 
-    def __init__(self, device="cuda:0"):
+    def __init__(self, device="cuda:0", enable_cameras=False, camera_width=320, camera_height=240):
         self.sim = SimulationContext(sim_utils.SimulationCfg(dt=0.02, render_interval=1, device=device))
         self.sim.set_camera_view(eye=(3.5, 5.0, 2.4), target=(0.0, 0.65, 0.80))
         cfg = UltraTabletopSceneCfg(num_envs=1, env_spacing=3.0)
         cfg.camera = None
+        self.camera_names = ()
+        if enable_cameras:
+            if camera_width <= 0 or camera_height <= 0:
+                raise ValueError("Camera width and height must be positive")
+            chain = "Geometry/world/fr30_1/fr30_2/fr30_3/fr30_4/fr30_5/fr30_6"
+            camera_paths = {
+                "head_camera": f"{{ENV_REGEX_NS}}/Ultra/{chain}/zed_left",
+                "left_wrist_camera": (
+                    f"{{ENV_REGEX_NS}}/Ultra/{chain}/la_1/la_2/la_3/la_4/la_5/la_6/"
+                    "la_gripper/la_wrist_fisheye"
+                ),
+                "right_wrist_camera": (
+                    f"{{ENV_REGEX_NS}}/Ultra/{chain}/ra_1/ra_2/ra_3/ra_4/ra_5/ra_6/"
+                    "ra_gripper/ra_wrist_fisheye"
+                ),
+            }
+            for name, prim_path in camera_paths.items():
+                setattr(cfg, name, CameraCfg(
+                    prim_path=prim_path, spawn=None, update_period=self.control_dt,
+                    height=camera_height, width=camera_width, data_types=["rgb"],
+                ))
+            self.camera_names = tuple(camera_paths)
         self.scene = InteractiveScene(cfg)
         self.sim.reset()
         self.robot = self.scene["robot"]
@@ -58,12 +81,16 @@ class UltraTeleopEnv(gym.Env):
             "cube_pose": gym.spaces.Box(-np.inf, np.inf, (7,), np.float32),
             "plate_pose": gym.spaces.Box(-np.inf, np.inf, (7,), np.float32),
         })
+        for name in self.camera_names:
+            self.observation_space[name.removesuffix("_camera") + "_rgb"] = gym.spaces.Box(
+                0, 255, (camera_height, camera_width, 3), np.uint8,
+            )
         self.elapsed = 0.0
 
     def observe(self):
         body_pose = numpy(self.robot.data.body_link_pose_w)[0, self.body_id]
         eef_pose = numpy(self.robot.data.body_link_pose_w)[0, self.eef_ids]
-        return {
+        observation = {
             "joint_pos": numpy(self.robot.data.joint_pos)[0],
             "joint_vel": numpy(self.robot.data.joint_vel)[0],
             "eef_pose": eef_pose,
@@ -72,6 +99,10 @@ class UltraTeleopEnv(gym.Env):
             "cube_pose": numpy(self.scene["cube"].data.root_pose_w)[0],
             "plate_pose": numpy(self.scene["plate"].data.root_pose_w)[0],
         }
+        for name in self.camera_names:
+            rgb = numpy(self.scene[name].data.output["rgb"])[0]
+            observation[name.removesuffix("_camera") + "_rgb"] = np.asarray(rgb[..., :3], dtype=np.uint8)
+        return observation
 
     def reset(self, *, seed=None, options=None):
         super().reset(seed=seed)

@@ -6,11 +6,18 @@ import h5py
 import numpy as np
 
 
+def _storage_kwargs(key):
+    """Use fast lossless compression for image tensors, not numeric state."""
+    if key.rsplit("/", 1)[-1].endswith("_rgb"):
+        return {"compression": "lzf", "shuffle": True}
+    return {}
+
+
 class EpisodeRecorder:
     def __init__(self, path, metadata):
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         self.file = h5py.File(path, "x")  # Never replace an existing dataset.
-        self.file.attrs["schema_version"] = 3
+        self.file.attrs["schema_version"] = 4
         self.file.attrs["metadata"] = json.dumps(metadata)
         self.data = self.file.create_group("data")
         self.episode = None
@@ -22,7 +29,7 @@ class EpisodeRecorder:
         self.episode.attrs["status"] = "incomplete"
         self.episode.attrs["success"] = False
         for key, value in initial_state.items():
-            self.episode.create_dataset(f"initial_state/{key}", data=value)
+            self.episode.create_dataset(f"initial_state/{key}", data=value, **_storage_kwargs(key))
         self.file.flush()
 
     def append(self, obs, action, next_obs, packet, targets, wall_time, sim_time):
@@ -34,7 +41,7 @@ class EpisodeRecorder:
             value = np.asarray(value)
             if key not in self.episode:
                 self.episode.create_dataset(key, shape=(0, *value.shape), maxshape=(None, *value.shape),
-                                            dtype=value.dtype, chunks=True)
+                                            dtype=value.dtype, chunks=(1, *value.shape), **_storage_kwargs(key))
             dataset = self.episode[key]
             dataset.resize(dataset.shape[0] + 1, axis=0)
             dataset[-1] = value

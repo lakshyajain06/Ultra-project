@@ -82,6 +82,11 @@ class UltraTabletopSceneCfg(InteractiveSceneCfg):
             clipping_range=(0.1, 100.0),
         ),
     )
+    # Existing robot camera prims are attached by the teleop environment only;
+    # keeping them optional avoids rendering overhead in the generic scene.
+    head_camera: CameraCfg | None = None
+    left_wrist_camera: CameraCfg | None = None
+    right_wrist_camera: CameraCfg | None = None
 
     robot: ArticulationCfg = ULTRA_CFG.replace(
         prim_path="{ENV_REGEX_NS}/Ultra",
