@@ -15,7 +15,7 @@ ULTRA_ACTION_JOINT_NAMES = (
     *(f"ra_j{i}" for i in range(1, 8)), "ra_gripper_joint",
 )
 TASK_STATE_NAMES = (
-    *(f"torso_j{i}_pos" for i in range(1, 7)),
+    *(f"torso_j{i}" for i in range(1, 7)),
     *(f"left_eef_body_{name}" for name in ("x", "y", "z", "qx", "qy", "qz", "qw")),
     "left_gripper_opening",
     *(f"right_eef_body_{name}" for name in ("x", "y", "z", "qx", "qy", "qz", "qw")),
@@ -86,8 +86,8 @@ def discover_episodes(config: DatasetConfig):
         seen_paths.add(path)
         with h5py.File(path, "r") as handle:
             schema_version = int(handle.attrs.get("schema_version", -1))
-            if schema_version not in (4, 5):
-                raise ValueError(f"{path} uses unsupported schema_version={schema_version}; expected 4 or 5")
+            if schema_version not in (4, 5, 6):
+                raise ValueError(f"{path} uses unsupported schema_version={schema_version}; expected 4, 5, or 6")
             try:
                 metadata = json.loads(handle.attrs["metadata"])
             except (KeyError, TypeError, json.JSONDecodeError) as error:
@@ -118,7 +118,10 @@ def discover_episodes(config: DatasetConfig):
                         )
                     state_datasets = []
                     for name in config.state_keys:
-                        state_datasets.extend(("joint_pos", "eef_pose_body") if name == "proprio" else (name,))
+                        if name == "proprio":
+                            state_datasets.extend(("proprio",) if "obs/proprio" in demo else ("joint_pos", "eef_pose_body"))
+                        else:
+                            state_datasets.append(name)
                     required = [f"obs/{k}" for k in dict.fromkeys((*state_datasets, *config.camera_names))]
                     missing = [name for name in required if name not in demo]
                     if missing:
@@ -134,17 +137,26 @@ def discover_episodes(config: DatasetConfig):
                                 f"observation_joint_names; got {shape}"
                             )
                     if "proprio" in config.state_keys:
-                        joint_shape = demo["obs/joint_pos"].shape
-                        eef_shape = demo["obs/eef_pose_body"].shape
-                        if len(joint_shape) != 2 or joint_shape[1] != len(observation_names):
-                            raise ValueError(
-                                f"{path}::{key}/obs/joint_pos must match {len(observation_names)} "
-                                f"observation_joint_names; got {joint_shape}"
-                            )
-                        if eef_shape != (length, 2, 7):
-                            raise ValueError(
-                                f"{path}::{key}/obs/eef_pose_body must be [T,2,7]; got {eef_shape}"
-                            )
+                        if "obs/proprio" in demo:
+                            proprio_shape = demo["obs/proprio"].shape
+                            if proprio_shape != (length, len(TASK_STATE_NAMES)):
+                                raise ValueError(
+                                    f"{path}::{key}/obs/proprio must be [T,22]; got {proprio_shape}"
+                                )
+                            if not np.isfinite(demo["obs/proprio"][...]).all():
+                                raise ValueError(f"{path}::{key}/obs/proprio contains non-finite values")
+                        else:
+                            joint_shape = demo["obs/joint_pos"].shape
+                            eef_shape = demo["obs/eef_pose_body"].shape
+                            if len(joint_shape) != 2 or joint_shape[1] != len(observation_names):
+                                raise ValueError(
+                                    f"{path}::{key}/obs/joint_pos must match {len(observation_names)} "
+                                    f"observation_joint_names; got {joint_shape}"
+                                )
+                            if eef_shape != (length, 2, 7):
+                                raise ValueError(
+                                    f"{path}::{key}/obs/eef_pose_body must be [T,2,7]; got {eef_shape}"
+                                )
                     for name in config.camera_names:
                         shape = demo[f"obs/{name}"].shape
                         if len(shape) != 4 or shape[-1] != 3 or demo[f"obs/{name}"].dtype != np.uint8:
@@ -201,8 +213,12 @@ def _state(demo, state_keys, index, controlled_joint_indices):
     values = []
     for key in state_keys:
         if key == "proprio":
-            value = compose_task_state(
-                demo["obs/joint_pos"][index], demo["obs/eef_pose_body"][index], controlled_joint_indices,
+            value = (
+                np.asarray(demo["obs/proprio"][index], dtype=np.float32)
+                if "obs/proprio" in demo
+                else compose_task_state(
+                    demo["obs/joint_pos"][index], demo["obs/eef_pose_body"][index], controlled_joint_indices,
+                )
             )
         else:
             value = np.asarray(demo[f"obs/{key}"][index], dtype=np.float32).reshape(-1)
@@ -221,13 +237,16 @@ def fit_normalizer(episodes, state_keys, epsilon=1e-6):
             state_parts = []
             for key in state_keys:
                 if key == "proprio":
-                    value = np.stack([
-                        compose_task_state(
-                            demo["obs/joint_pos"][index], demo["obs/eef_pose_body"][index],
-                            episode.controlled_joint_indices,
-                        )
-                        for index in range(episode.length)
-                    ]).astype(np.float64)
+                    if "obs/proprio" in demo:
+                        value = np.asarray(demo["obs/proprio"], dtype=np.float64)
+                    else:
+                        value = np.stack([
+                            compose_task_state(
+                                demo["obs/joint_pos"][index], demo["obs/eef_pose_body"][index],
+                                episode.controlled_joint_indices,
+                            )
+                            for index in range(episode.length)
+                        ]).astype(np.float64)
                 else:
                     value = np.asarray(demo[f"obs/{key}"], dtype=np.float64).reshape(episode.length, -1)
                 if key in ("joint_pos", "joint_vel"):

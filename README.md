@@ -182,9 +182,10 @@ starting the next attempt.
 The local HDF5 schema is versioned; it is not a claim of compatibility with
 Isaac Lab Mimic or LeRobot's dataset schema. Each `data/demo_XXXXXX` contains:
 
-- `obs` and `next_obs`: all 24 joint positions/velocities, both palm poses,
-  cube pose and plate pose, plus synchronized `head_rgb`, `left_wrist_rgb`, and
-  `right_wrist_rgb` uint8 images paired before/after the action;
+- `obs` and `next_obs`: the canonical 22-D `proprio` state, raw 24 joint
+  positions/velocities, both palm poses, cube pose and plate pose, plus
+  synchronized `head_rgb`, `left_wrist_rgb`, and `right_wrist_rgb` uint8 images
+  paired before/after the action;
 - `actions`: the executed 22 joint-position targets, ordered torso[6], left
   arm[7], left jaw[1], right arm[7], right jaw[1]; torso/arms use radians and
   jaws use **metres** (0 closed, 0.045 open);
@@ -193,7 +194,12 @@ Isaac Lab Mimic or LeRobot's dataset schema. Each `data/demo_XXXXXX` contains:
   orientations, plus wall-clock and simulated timestamps;
 - `controller_rotation_offsets`: the per-step fixed controller-to-tool XYZW
   calibration used for reproducible absolute wrist targets;
-- `initial_state`, `status`, `success`, and `num_samples`.
+- `initial_state/proprio`, `status`, `success`, and `num_samples`.
+
+New recordings use schema version 6 and store `proprio` directly, in the same
+22-D layout consumed by the manager environment and ACT pipeline. Older
+schema-4/5 recordings remain readable; the training loader reconstructs their
+state from the raw joint and body-relative end-effector fields.
 
 Dataset metadata includes joint names, action units, quaternion convention,
 tool rotation offset, task text, seed, control rate, package versions, and hashes

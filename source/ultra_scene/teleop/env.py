@@ -10,7 +10,7 @@ from isaaclab.sim import SimulationContext
 
 from ultra_scene import UltraJointPositionController, UltraTabletopSceneCfg
 from ultra_scene.robots.ultra import as_torch
-from .control import compose_pose, relative_pose, solve_ik
+from .control import build_task_proprioception, compose_pose, relative_pose, solve_ik
 
 
 def numpy(value):
@@ -64,6 +64,7 @@ class UltraTeleopEnv(gym.Env):
         self.arm_ids = [self.robot.find_joints([f"{prefix}_j{i}" for i in range(1, 8)],
                                              preserve_order=True)[0] for prefix in ("la", "ra")]
         self.torso_ids = self.robot.find_joints([f"torso_j{i}" for i in range(1, 7)], preserve_order=True)[0]
+        self.gripper_ids = [int(self.controller.joint_ids[13]), int(self.controller.joint_ids[21])]
         body_ids, body_names = self.robot.find_bodies(["fr30_6"], preserve_order=True)
         if body_names != ["fr30_6"]:
             raise RuntimeError(f"Unexpected shared body link: {body_names}")
@@ -73,6 +74,7 @@ class UltraTeleopEnv(gym.Env):
         action_limits = numpy(self.limits[self.controller.joint_ids])
         self.action_space = gym.spaces.Box(action_limits[:, 0], action_limits[:, 1], dtype=np.float32)
         self.observation_space = gym.spaces.Dict({
+            "proprio": gym.spaces.Box(-np.inf, np.inf, (22,), np.float32),
             "joint_pos": gym.spaces.Box(-np.inf, np.inf, (24,), np.float32),
             "joint_vel": gym.spaces.Box(-np.inf, np.inf, (24,), np.float32),
             "eef_pose": gym.spaces.Box(-np.inf, np.inf, (2, 7), np.float32),
@@ -90,11 +92,15 @@ class UltraTeleopEnv(gym.Env):
     def observe(self):
         body_pose = numpy(self.robot.data.body_link_pose_w)[0, self.body_id]
         eef_pose = numpy(self.robot.data.body_link_pose_w)[0, self.eef_ids]
+        joint_pos = numpy(self.robot.data.joint_pos)[0]
+        joint_vel = numpy(self.robot.data.joint_vel)[0]
+        eef_pose_body = np.stack([relative_pose(pose, body_pose) for pose in eef_pose])
         observation = {
-            "joint_pos": numpy(self.robot.data.joint_pos)[0],
-            "joint_vel": numpy(self.robot.data.joint_vel)[0],
+            "proprio": build_task_proprioception(joint_pos, eef_pose_body, self.torso_ids, self.gripper_ids),
+            "joint_pos": joint_pos,
+            "joint_vel": joint_vel,
             "eef_pose": eef_pose,
-            "eef_pose_body": np.stack([relative_pose(pose, body_pose) for pose in eef_pose]),
+            "eef_pose_body": eef_pose_body,
             "body_pose": body_pose,
             "cube_pose": numpy(self.scene["cube"].data.root_pose_w)[0],
             "plate_pose": numpy(self.scene["plate"].data.root_pose_w)[0],

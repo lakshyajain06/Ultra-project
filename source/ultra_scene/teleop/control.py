@@ -5,6 +5,35 @@ import torch
 from scipy.spatial.transform import Rotation
 
 
+def build_task_proprioception(joint_pos, eef_pose_body, torso_ids, gripper_ids):
+    """Build the canonical 22-D task state stored in demonstrations."""
+    joint_pos = np.asarray(joint_pos, dtype=np.float32).reshape(-1)
+    eef_pose_body = np.asarray(eef_pose_body, dtype=np.float32).copy()
+    if eef_pose_body.shape != (2, 7):
+        raise ValueError(f"eef_pose_body must have shape (2, 7), got {eef_pose_body.shape}")
+    torso_ids = np.asarray(torso_ids, dtype=np.int64)
+    gripper_ids = np.asarray(gripper_ids, dtype=np.int64)
+    if torso_ids.shape != (6,) or gripper_ids.shape != (2,):
+        raise ValueError("torso_ids must contain 6 joints and gripper_ids must contain 2 joints")
+    all_ids = np.concatenate((torso_ids, gripper_ids))
+    if np.any(all_ids < 0) or np.max(all_ids) >= joint_pos.size:
+        raise ValueError("joint ids are outside the articulation state")
+    quaternions = eef_pose_body[:, 3:7]
+    norms = np.linalg.norm(quaternions, axis=-1, keepdims=True)
+    if np.any(norms < np.finfo(np.float32).eps):
+        raise ValueError("eef_pose_body contains a zero-length quaternion")
+    quaternions /= norms
+    eef_pose_body[:, 3:7] = np.where(quaternions[:, 3:4] < 0.0, -quaternions, quaternions)
+    state = np.concatenate((
+        joint_pos[torso_ids],
+        eef_pose_body[0], joint_pos[gripper_ids[0:1]],
+        eef_pose_body[1], joint_pos[gripper_ids[1:2]],
+    ))
+    if state.shape != (22,) or not np.isfinite(state).all():
+        raise ValueError("task proprioception must contain 22 finite values")
+    return state
+
+
 class ClutchMapper:
     def __init__(self, scale=1.0, rotation_offset_deg=None):
         self.scale = scale

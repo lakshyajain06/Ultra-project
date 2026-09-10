@@ -7,7 +7,9 @@ import h5py
 import numpy as np
 import torch
 from scipy.spatial.transform import Rotation
-from ultra_scene.teleop.control import BodyTargetMapper, ClutchMapper, compose_pose, relative_pose, solve_ik
+from ultra_scene.teleop.control import (
+    BodyTargetMapper, ClutchMapper, build_task_proprioception, compose_pose, relative_pose, solve_ik,
+)
 from ultra_scene.teleop.recording import EpisodeRecorder
 
 
@@ -147,23 +149,39 @@ class TeleopTests(unittest.TestCase):
         wrist_world1 = compose_pose(body1, wrist_body)
         np.testing.assert_allclose(wrist_world1[:3], [0.2, -0.7, 0.1], atol=1e-7)
 
+    def test_task_proprioception_has_canonical_22d_layout(self):
+        joint_pos = np.arange(24, dtype=np.float32)
+        eef = np.array([
+            [1.0, 2.0, 3.0, 0.0, 0.0, 0.0, -2.0],
+            [4.0, 5.0, 6.0, 0.0, 0.0, 0.0, 1.0],
+        ], dtype=np.float32)
+        state = build_task_proprioception(joint_pos, eef, [0, 1, 2, 3, 4, 5], [13, 21])
+        self.assertEqual(state.shape, (22,))
+        np.testing.assert_allclose(state[:6], np.arange(6, dtype=np.float32))
+        np.testing.assert_allclose(state[6:13], [1, 2, 3, 0, 0, 0, 1])
+        self.assertEqual(state[13], 13)
+        np.testing.assert_allclose(state[14:21], [4, 5, 6, 0, 0, 0, 1])
+        self.assertEqual(state[21], 21)
+
     def test_recording_alignment_labels_and_no_overwrite(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "demos.hdf5"
             recorder = EpisodeRecorder(path, {"test": True})
             image = np.arange(4 * 5 * 3, dtype=np.uint8).reshape(4, 5, 3)
             offsets = np.tile([0, 0, 0, 1], (2, 1))
-            recorder.begin({"joint_pos": np.zeros(24), "head_rgb": image})
-            recorder.append({"joint_pos": np.zeros(24), "head_rgb": image}, np.ones(22),
-                            {"joint_pos": np.ones(24), "head_rgb": image},
+            proprio = np.zeros(22, dtype=np.float32)
+            recorder.begin({"proprio": proprio, "joint_pos": np.zeros(24), "head_rgb": image})
+            recorder.append({"proprio": proprio, "joint_pos": np.zeros(24), "head_rgb": image}, np.ones(22),
+                            {"proprio": np.ones(22), "joint_pos": np.ones(24), "head_rgb": image},
                             self.packet, self.pose, 10.0, 0.04, offsets)
             recorder.finish("success")
-            recorder.begin({"joint_pos": np.ones(24), "head_rgb": image})
+            recorder.begin({"proprio": np.ones(22), "joint_pos": np.ones(24), "head_rgb": image})
             recorder.close()
             with h5py.File(path) as file:
-                self.assertEqual(file.attrs["schema_version"], 5)
+                self.assertEqual(file.attrs["schema_version"], 6)
                 demo = file["data/demo_000000"]
                 self.assertEqual(demo["actions"].shape, (1, 22))
+                np.testing.assert_array_equal(demo["obs/proprio"][0], proprio)
                 self.assertEqual(demo["obs/joint_pos"][0, 0], 0)
                 self.assertEqual(demo["next_obs/joint_pos"][0, 0], 1)
                 np.testing.assert_array_equal(demo["obs/head_rgb"][0], image)
