@@ -7,10 +7,10 @@ import h5py
 import numpy as np
 import torch
 from scipy.spatial.transform import Rotation
-from ultra_scene.teleop.control import (
+from sim.teleop.control import (
     BodyTargetMapper, ClutchMapper, build_task_proprioception, compose_pose, relative_pose, solve_ik,
 )
-from ultra_scene.teleop.recording import EpisodeRecorder
+from data.recording import EpisodeRecorder
 
 
 class TeleopTests(unittest.TestCase):
@@ -195,7 +195,7 @@ class TeleopTests(unittest.TestCase):
 
     def test_controller_graph_missing_tracking(self):
         try:
-            from ultra_scene.teleop.input import PackControllers, build_pipeline
+            from sim.teleop.input import PackControllers, build_pipeline
             from isaacteleop.retargeting_engine.interface import OptionalTensorGroup, OptionalType
             from isaacteleop.retargeting_engine.tensor_types import ControllerInput
         except ImportError:

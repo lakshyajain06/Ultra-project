@@ -7,14 +7,19 @@ starting point for a manipulation environment.
 ## Layout
 
 ```text
-assets/robots/ultra/       Source-contract metadata (generated USD stays local)
-scripts/                   Runnable Isaac Lab entry points
-source/ultra_scene/        Scene package
-source/ultra_scene/robots/ Robot configurations and controllers
-tests/                     Offline USD integrity checks
-tools/                     Asset conversion utilities
-third_party/SimFoundry/    Existing third-party checkout
+assets/robots/ultra/ Source-contract metadata (generated USD stays local)
+src/sim/             Isaac Lab scenes, environments, robots, and teleoperation
+src/data/            Shared demonstration schema, recording, and datasets
+src/learning/        Simulator-independent models, inference, and training
+scripts/             Runnable workflow entry points
+tests/               Offline simulation, data, and learning tests
+tools/               Asset conversion utilities
+third_party/         Third-party source checkouts
 ```
+
+The source domains have one-way dependencies: `data` is standalone, `learning`
+may consume `data`, and `sim` does not import either. Scripts compose simulation
+and learned-policy inference when a workflow needs both.
 
 ## Run the scene
 
@@ -370,7 +375,7 @@ For manager-environment integration, pass the same observation dictionary to
 the simulator-independent inference wrapper:
 
 ```python
-from ultra_scene.learning.inference import ACTInference
+from learning.inference import ACTInference
 
 policy = ACTInference.from_checkpoint("outputs/act/place_cube/best.pt", device="cuda")
 action_chunk = policy.predict(observation)  # accepts manager [1,22] proprio and [1,H,W,3] RGB

@@ -8,8 +8,8 @@ from isaaclab.scene import InteractiveScene
 from isaaclab.sensors import CameraCfg
 from isaaclab.sim import SimulationContext
 
-from ultra_scene import UltraJointPositionController, UltraTabletopSceneCfg
-from ultra_scene.robots.ultra import as_torch
+from sim import UltraJointPositionController, UltraTabletopSceneCfg
+from sim.robots.ultra import as_torch
 from .control import build_task_proprioception, compose_pose, relative_pose, solve_ik
 
 

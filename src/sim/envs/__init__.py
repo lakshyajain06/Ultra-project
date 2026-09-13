@@ -1,4 +1,4 @@
-"""Registered manager-based RL environments for Ultra."""
+"""Registered manager-based simulation environments for Ultra."""
 
 import gymnasium as gym
 

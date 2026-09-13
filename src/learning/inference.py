@@ -4,7 +4,7 @@ import numpy as np
 import torch
 
 from .models import ACTConfig, ACTPolicy
-from .training.data import Normalizer, compose_task_state
+from data.datasets import Normalizer, compose_task_state
 
 
 def _as_numpy(value, dtype):

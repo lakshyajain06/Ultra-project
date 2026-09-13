@@ -5,13 +5,7 @@ from pathlib import Path
 import h5py
 import numpy as np
 
-PROPRIO_LAYOUT = (
-    *(f"torso_j{i}" for i in range(1, 7)),
-    *(f"left_eef_body_{name}" for name in ("x", "y", "z", "qx", "qy", "qz", "qw")),
-    "left_gripper_opening",
-    *(f"right_eef_body_{name}" for name in ("x", "y", "z", "qx", "qy", "qz", "qw")),
-    "right_gripper_opening",
-)
+from .schema import TASK_STATE_NAMES
 
 
 def _storage_kwargs(key):
@@ -29,7 +23,7 @@ class EpisodeRecorder:
         # retaining the raw state fields needed by replay and older tools.
         self.file.attrs["schema_version"] = 6
         metadata = dict(metadata)
-        metadata.setdefault("proprio_layout", list(PROPRIO_LAYOUT))
+        metadata.setdefault("proprio_layout", list(TASK_STATE_NAMES))
         self.file.attrs["metadata"] = json.dumps(metadata)
         self.data = self.file.create_group("data")
         self.episode = None

@@ -45,10 +45,10 @@ app = launcher.app
 
 import numpy as np
 from scipy.spatial.transform import Rotation
-from ultra_scene.teleop.control import BodyTargetMapper, ClutchMapper
-from ultra_scene.teleop.env import UltraTeleopEnv, numpy
-from ultra_scene.teleop.recording import EpisodeRecorder
-from ultra_scene.robots.ultra.ultra_cfg import ULTRA_USD, REPO_ROOT
+from data.recording import EpisodeRecorder
+from sim.teleop.control import BodyTargetMapper, ClutchMapper
+from sim.teleop.env import UltraTeleopEnv, numpy
+from sim.robots.ultra.ultra_cfg import ULTRA_USD, REPO_ROOT
 
 
 def main():
@@ -109,7 +109,7 @@ def main():
         if not args.smoke:
             from isaaclab_teleop import IsaacTeleopCfg, XrCfg, CLOUDXR_JS_ENV, create_isaac_teleop_device
             from isaacteleop.teleop_session_manager import RetargetingExecutionConfig
-            from ultra_scene.teleop.input import build_pipeline
+            from sim.teleop.input import build_pipeline
 
             cfg = IsaacTeleopCfg(
                 pipeline_builder=build_pipeline, sim_device=args.device,

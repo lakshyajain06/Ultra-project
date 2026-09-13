@@ -1,4 +1,4 @@
-"""Isaac Lab configuration for the Ultra tabletop scene."""
+"""Isaac Lab configuration and environments for the Ultra robot."""
 
 from .scene_cfg import UltraTabletopSceneCfg
 from .robots.ultra import ULTRA_CFG, ULTRA_CONTROLLED_JOINT_NAMES, UltraJointPositionController

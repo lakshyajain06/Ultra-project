@@ -37,8 +37,8 @@ from isaaclab.sim import SimulationContext
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "source"))
-from ultra_scene import UltraJointPositionController, UltraTabletopSceneCfg  # noqa: E402
-from ultra_scene.robots.ultra import as_torch  # noqa: E402
+from sim import UltraJointPositionController, UltraTabletopSceneCfg  # noqa: E402
+from sim.robots.ultra import as_torch  # noqa: E402
 
 
 def camera_rgb(scene):

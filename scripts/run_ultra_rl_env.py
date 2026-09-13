@@ -37,8 +37,8 @@ app = launcher.app
 
 import torch
 from isaaclab.envs import ManagerBasedRLEnv
-from ultra_scene import ULTRA_CONTROLLED_JOINT_NAMES
-from ultra_scene.rl import CAMERA_STREAMS, UltraCubePlateEnvCfg, UltraCubePlateVisionEnvCfg
+from sim import ULTRA_CONTROLLED_JOINT_NAMES
+from sim.envs import CAMERA_STREAMS, UltraCubePlateEnvCfg, UltraCubePlateVisionEnvCfg
 
 
 def main():

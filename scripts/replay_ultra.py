@@ -82,7 +82,7 @@ if end <= args.start_step:
 launcher = AppLauncher(args)
 app = launcher.app
 
-from ultra_scene.teleop.env import UltraTeleopEnv
+from sim.teleop.env import UltraTeleopEnv
 
 
 class RecordedCameraViewer:

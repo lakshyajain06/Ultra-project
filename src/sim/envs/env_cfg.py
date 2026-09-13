@@ -14,7 +14,7 @@ from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.sensors import CameraCfg
 from isaaclab.utils.configclass import configclass
 
-from ultra_scene import ULTRA_CONTROLLED_JOINT_NAMES, UltraTabletopSceneCfg
+from sim import ULTRA_CONTROLLED_JOINT_NAMES, UltraTabletopSceneCfg
 
 from . import mdp
 

@@ -10,10 +10,10 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-from ultra_scene.learning.inference import ACTInference
-from ultra_scene.learning.models import ACTConfig, ACTPolicy
-from ultra_scene.learning.training.data import DatasetConfig, build_datasets, compose_task_state, dataset_manifest
-from ultra_scene.learning.training.engine import TrainConfig, restore_checkpoint, run_epoch, save_checkpoint
+from data.datasets import DatasetConfig, build_datasets, compose_task_state, dataset_manifest
+from learning.inference import ACTInference
+from learning.models import ACTConfig, ACTPolicy
+from learning.training.engine import TrainConfig, restore_checkpoint, run_epoch, save_checkpoint
 
 
 CAMERAS = ("head_rgb", "left_wrist_rgb", "right_wrist_rgb")

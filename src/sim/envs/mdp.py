@@ -8,7 +8,7 @@ from isaaclab.envs.mdp.actions import JointPositionAction
 from isaaclab.managers import ManagerTermBase, SceneEntityCfg
 from isaaclab.utils.math import quat_apply, quat_apply_inverse, quat_unique, subtract_frame_transforms
 
-from ultra_scene import ULTRA_CONTROLLED_JOINT_NAMES
+from sim import ULTRA_CONTROLLED_JOINT_NAMES
 
 
 def _tensor(value):

@@ -6,10 +6,11 @@ from types import SimpleNamespace
 import gymnasium as gym
 import torch
 from isaaclab.managers import SceneEntityCfg
-from ultra_scene import ULTRA_CONTROLLED_JOINT_NAMES
-from ultra_scene.learning.models import ACTConfig
-from ultra_scene.learning.training.data import DatasetConfig, TASK_STATE_NAMES, ULTRA_ACTION_JOINT_NAMES
-from ultra_scene.rl import UltraCubePlateEnvCfg, UltraCubePlateVisionEnvCfg, configure_cameras, mdp
+from data.datasets import DatasetConfig
+from data.schema import TASK_STATE_NAMES, ULTRA_ACTION_JOINT_NAMES
+from learning.models import ACTConfig
+from sim import ULTRA_CONTROLLED_JOINT_NAMES
+from sim.envs import UltraCubePlateEnvCfg, UltraCubePlateVisionEnvCfg, configure_cameras, mdp
 
 
 def _asset(**values):
@@ -33,7 +34,7 @@ class ManagerBasedRLConfigTests(unittest.TestCase):
     def test_registered_state_and_vision_variants(self):
         self.assertEqual(
             gym.spec("Isaac-Ultra-Cube-Plate-v0").kwargs["env_cfg_entry_point"],
-            "ultra_scene.rl.env_cfg:UltraCubePlateEnvCfg",
+            "sim.envs.env_cfg:UltraCubePlateEnvCfg",
         )
         cfg = UltraCubePlateVisionEnvCfg()
         self.assertEqual(cfg.scene.num_envs, 1)

@@ -1,4 +1,4 @@
-"""Robot definitions available to the Ultra scene package."""
+"""Robot definitions available to the Ultra simulation package."""
 
 from .ultra import ULTRA_CFG, UltraJointPositionController
 

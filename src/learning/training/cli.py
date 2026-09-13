@@ -8,8 +8,8 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-from ultra_scene.learning.models import ACTConfig, ACTPolicy
-from .data import DatasetConfig, Normalizer, build_datasets, dataset_manifest
+from data.datasets import DatasetConfig, Normalizer, build_datasets, dataset_manifest
+from learning.models import ACTConfig, ACTPolicy
 from .engine import TrainConfig, restore_checkpoint, run_epoch, save_checkpoint, seed_everything
 
 
