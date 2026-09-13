@@ -3,6 +3,7 @@
 import importlib.util
 import json
 from pathlib import Path
+import shutil
 import tempfile
 
 import h5py
@@ -27,10 +28,11 @@ def test_annotation_updates_hdf5_and_preserves_original_status():
             demo.create_dataset("obs/head_rgb", data=np.zeros((2, 3, 4, 3), dtype=np.uint8))
 
         annotator = MODULE.Annotator(path)
-        loaded = annotator.load_episode("demo_000000")
-        assert loaded["cache_bytes"] == 2 * 3 * 4 * 3
-        assert loaded["cameras"] == ["head_rgb"]
-        assert annotator.frame("demo_000000", "head_rgb", 1).shape == (3, 4, 3)
+        if shutil.which("ffmpeg"):
+            loaded = annotator.load_episode("demo_000000")
+            assert loaded["video_bytes"] > 0
+            video = annotator.video("demo_000000")
+            assert b"ftyp" in video[:32]
         _, episode = annotator.annotate("demo_000000", "success", "Actually completed")
         assert episode["recorded_status"] == "aborted"
         assert episode["effective_status"] == "success"

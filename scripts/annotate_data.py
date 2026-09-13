@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
+import shutil
+import subprocess
 import threading
 from urllib.parse import unquote, urlparse
 
@@ -20,29 +22,87 @@ HTML = r"""<!doctype html>
 :root{color-scheme:dark;font:15px system-ui;background:#12151a;color:#e8edf2}*{box-sizing:border-box}
 body{margin:0;display:grid;grid-template-columns:280px 1fr;height:100vh}aside{padding:18px;border-right:1px solid #343a43;overflow:auto}
 main{padding:18px;overflow:auto}h1{font-size:19px;margin:0 0 6px}.muted{color:#9ca7b5;font-size:13px}.episode{width:100%;text-align:left;padding:10px;margin:4px 0;border:1px solid #343a43;border-radius:7px;background:#1b2027;color:inherit;cursor:pointer}.episode.active{border-color:#5aa7ff;background:#202c39}.episode b{display:block}.episode span{font-size:12px;color:#aab4c0}
-.views{display:grid;grid-template-columns:repeat(3,minmax(220px,1fr));gap:10px;margin-top:16px}.view{background:#090b0e;border-radius:8px;overflow:hidden}.view label{display:block;padding:7px 10px;background:#20252c}.view canvas{display:block;width:100%;aspect-ratio:4/3;object-fit:contain}
-.transport{display:grid;grid-template-columns:auto auto 1fr auto;gap:10px;align-items:center;margin:16px 0}.transport input{width:100%}button,select,textarea{font:inherit}.primary{background:#2388ed;color:white;border:0;border-radius:6px;padding:8px 14px;cursor:pointer}.panel{display:grid;grid-template-columns:180px 1fr auto;gap:10px;align-items:start;background:#1b2027;padding:14px;border-radius:8px}select,textarea{background:#101318;color:inherit;border:1px solid #414854;border-radius:5px;padding:8px}textarea{min-height:70px;resize:vertical}.saved{color:#70d99b;padding:8px}
-@media(max-width:900px){body{grid-template-columns:1fr;height:auto}aside{border-right:0;border-bottom:1px solid #343a43}.views{grid-template-columns:1fr}.panel{grid-template-columns:1fr}}
+video{display:block;width:min(100%,960px);max-height:70vh;background:#050608;margin:16px auto;border-radius:8px}button,select,textarea{font:inherit}.primary{background:#2388ed;color:white;border:0;border-radius:6px;padding:8px 14px;cursor:pointer}.panel{display:grid;grid-template-columns:180px 1fr auto;gap:10px;align-items:start;background:#1b2027;padding:14px;border-radius:8px}select,textarea{background:#101318;color:inherit;border:1px solid #414854;border-radius:5px;padding:8px}textarea{min-height:70px;resize:vertical}.saved{color:#70d99b;padding:8px}
+@media(max-width:900px){body{grid-template-columns:1fr;height:auto}aside{border-right:0;border-bottom:1px solid #343a43}.panel{grid-template-columns:1fr}}
 </style></head><body>
 <aside><h1>Ultra annotator</h1><div id="dataset" class="muted"></div><div id="episodes"></div></aside>
 <main><h1 id="title">Select an episode</h1><div id="details" class="muted"></div>
-<div class="views" id="views"></div>
-<div class="transport"><button id="play" class="primary">Play</button><button id="prev">−1</button><input id="frame" type="range" min="0" max="0" value="0"><span id="counter">0 / 0</span></div>
+<video id="video" controls playsinline></video>
 <div class="panel"><select id="status"></select><textarea id="notes" placeholder="Notes about this episode or label correction"></textarea><button id="save" class="primary">Save correction</button></div><div id="saved" class="saved"></div>
 <script>
-const cameras=['head_rgb','left_wrist_rgb','right_wrist_rgb'], labels=['success','aborted','timeout','interrupted','rejected','synthetic'];
-let info,current=null,frame=0,playing=false,requestController=null;
+const labels=['success','aborted','timeout','interrupted','rejected','synthetic'];
+let info,current=null,videoUrl=null,selection=0;
 const $=id=>document.getElementById(id); labels.forEach(x=>$('status').add(new Option(x,x)));
 async function api(url,options){const r=await fetch(url,options);if(!r.ok)throw Error(await r.text());return r.headers.get('content-type')?.includes('json')?r.json():r.arrayBuffer()}
 function renderList(){const box=$('episodes');box.innerHTML='';info.episodes.forEach(ep=>{const b=document.createElement('button');b.className='episode'+(current?.name===ep.name?' active':'');b.innerHTML=`<b>${ep.name}</b><span>${ep.effective_status}${ep.annotated?' • corrected':''} · ${ep.samples} frames · ${ep.seconds.toFixed(1)}s</span>`;b.onclick=()=>select(ep);box.appendChild(b)})}
-async function select(ep){stop();current=null;$('title').textContent=`Loading ${ep.name}…`;$('details').textContent='Reading this episode into memory once';const loaded=await api(`/api/episode/${encodeURIComponent(ep.name)}`);current=ep;frame=0;$('title').textContent=ep.name;$('details').textContent=`recorded: ${ep.recorded_status} · effective: ${ep.effective_status} · ${ep.samples} samples @ ${info.control_hz} Hz · ${(loaded.cache_bytes/1048576).toFixed(1)} MiB cached`;$('status').value=ep.effective_status;$('notes').value=ep.notes||'';$('frame').max=Math.max(0,ep.samples-1);$('frame').value=0;$('views').innerHTML='';ep.cameras.forEach(cam=>{$('views').insertAdjacentHTML('beforeend',`<div class="view"><label>${cam.replaceAll('_',' ')}</label><canvas id="${cam}"></canvas></div>`)});renderList();await draw()}
-async function draw(){if(!current||!current.samples)return false;if(requestController)requestController.abort();const controller=new AbortController();requestController=controller;const shownFrame=frame,shownEpisode=current;$('counter').textContent=`${shownFrame+1} / ${shownEpisode.samples}`;$('frame').value=shownFrame;try{await Promise.all(shownEpisode.cameras.map(async cam=>{const r=await fetch(`/api/frame/${encodeURIComponent(shownEpisode.name)}/${cam}/${shownFrame}`,{signal:controller.signal});if(!r.ok)throw Error(await r.text());const w=+r.headers.get('X-Width'),h=+r.headers.get('X-Height'),rgb=new Uint8ClampedArray(await r.arrayBuffer()),rgba=new Uint8ClampedArray(w*h*4);for(let i=0,j=0;i<rgb.length;i+=3,j+=4){rgba[j]=rgb[i];rgba[j+1]=rgb[i+1];rgba[j+2]=rgb[i+2];rgba[j+3]=255}if(current!==shownEpisode||frame!==shownFrame)return;const c=$(cam);c.width=w;c.height=h;c.getContext('2d').putImageData(new ImageData(rgba,w,h),0,0)}));return true}catch(e){if(e.name!=='AbortError')throw e;return false}}
-function stop(){playing=false;if(requestController)requestController.abort();$('play').textContent='Play'}
-async function play(){if(playing){stop();return}if(!current)return;playing=true;$('play').textContent='Pause';while(playing&&frame<current.samples){const started=performance.now(),shown=frame;if(!await draw()||!playing)break;if(shown>=current.samples-1){stop();break}const delay=Math.max(0,1000/info.control_hz-(performance.now()-started));await new Promise(resolve=>setTimeout(resolve,delay));if(playing&&frame===shown)frame++}}
-$('play').onclick=play;$('prev').onclick=()=>{stop();frame=Math.max(0,frame-1);draw()};$('frame').oninput=e=>{stop();frame=+e.target.value;draw()};
+async function select(ep){const selected=++selection;current=null;$('video').pause();$('title').textContent=`Encoding ${ep.name}…`;$('details').textContent='Building an in-memory review video; no file is written';const loaded=await api(`/api/episode/${encodeURIComponent(ep.name)}`);const response=await fetch(`/api/video/${encodeURIComponent(ep.name)}`);if(!response.ok)throw Error(await response.text());const url=URL.createObjectURL(await response.blob());if(selected!==selection){URL.revokeObjectURL(url);return}if(videoUrl)URL.revokeObjectURL(videoUrl);videoUrl=url;$('video').src=url;current=ep;$('title').textContent=ep.name;$('details').textContent=`recorded: ${ep.recorded_status} · effective: ${ep.effective_status} · ${ep.samples} samples @ ${info.control_hz} Hz · ${(loaded.video_bytes/1048576).toFixed(1)} MiB in memory`;$('status').value=ep.effective_status;$('notes').value=ep.notes||'';renderList()}
 $('save').onclick=async()=>{if(!current)return;const result=await api(`/api/annotation/${encodeURIComponent(current.name)}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:$('status').value,notes:$('notes').value})});Object.assign(current,result.episode);$('saved').textContent=`Saved to ${result.path}`;renderList();setTimeout(()=>$('saved').textContent='',2500)};
 api('/api/dataset').then(x=>{info=x;$('dataset').textContent=`${x.dataset}\n${x.task}`;renderList();if(x.episodes.length)select(x.episodes[0])}).catch(e=>document.body.textContent=e);
 </script></main></body></html>"""
+
+
+def encode_mosaic_video(camera_frames, frame_rate):
+    """Encode synchronized RGB arrays as a fragmented MP4 held entirely in RAM."""
+    if not camera_frames or frame_rate <= 0:
+        raise ValueError("At least one camera and a positive frame rate are required")
+    shapes = [frames.shape for frames in camera_frames]
+    if any(len(shape) != 4 or shape[-1] != 3 for shape in shapes):
+        raise ValueError(f"Camera arrays must be [T,H,W,3], got {shapes}")
+    if len({shape[:3] for shape in shapes}) != 1:
+        raise ValueError(f"Camera arrays must have matching T/H/W dimensions, got {shapes}")
+    count, height, width, _ = shapes[0]
+    if not count:
+        raise ValueError("Cannot encode an empty episode")
+    if len(camera_frames) == 1:
+        video_height, video_width = height, width
+    elif len(camera_frames) == 2:
+        video_height, video_width = height, width * 2
+    else:
+        video_height, video_width = height * 2, width * 2
+    video_height += video_height % 2
+    video_width += video_width % 2
+    command = [
+        shutil.which("ffmpeg") or "ffmpeg", "-hide_banner", "-loglevel", "error",
+        "-f", "rawvideo", "-pixel_format", "rgb24",
+        "-video_size", f"{video_width}x{video_height}", "-framerate", str(frame_rate),
+        "-i", "pipe:0", "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "25",
+        "-pix_fmt", "yuv420p", "-movflags", "frag_keyframe+empty_moov+default_base_moof",
+        "-f", "mp4", "pipe:1",
+    ]
+    process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    output, errors = [], []
+    readers = [
+        threading.Thread(target=lambda: output.append(process.stdout.read()), daemon=True),
+        threading.Thread(target=lambda: errors.append(process.stderr.read()), daemon=True),
+    ]
+    for reader in readers:
+        reader.start()
+    try:
+        for index in range(count):
+            if len(camera_frames) == 1:
+                mosaic = np.zeros((video_height, video_width, 3), dtype=np.uint8)
+                mosaic[:height, :width] = camera_frames[0][index]
+            else:
+                mosaic = np.zeros((video_height, video_width, 3), dtype=np.uint8)
+                if len(camera_frames) == 2:
+                    mosaic[:height, :width] = camera_frames[0][index]
+                    mosaic[:height, width:2 * width] = camera_frames[1][index]
+                else:
+                    mosaic[:height, width // 2:width // 2 + width] = camera_frames[0][index]
+                    mosaic[height:2 * height, :width] = camera_frames[1][index]
+                    mosaic[height:2 * height, width:2 * width] = camera_frames[2][index]
+            process.stdin.write(np.ascontiguousarray(mosaic).tobytes())
+    except BrokenPipeError:
+        pass
+    finally:
+        process.stdin.close()
+    return_code = process.wait()
+    for reader in readers:
+        reader.join()
+    if return_code:
+        message = errors[0].decode(errors="replace").strip() if errors else "unknown ffmpeg error"
+        raise RuntimeError(f"ffmpeg failed: {message}")
+    return output[0]
 
 
 class Annotator:
@@ -50,8 +110,7 @@ class Annotator:
         self.dataset = Path(dataset).resolve()
         self.io_lock = threading.Lock()
         self.cached_episode = None
-        self.cached_frames = {}
-        self.cache_bytes = 0
+        self.cached_video = b""
 
     def summary(self):
         with self.io_lock, h5py.File(self.dataset, "r") as handle:
@@ -76,7 +135,7 @@ class Annotator:
         }
 
     def load_episode(self, episode):
-        """Replace the bounded cache with all camera frames for one episode."""
+        """Replace the bounded cache with one in-memory mosaic MP4."""
         with self.io_lock:
             if self.cached_episode != episode:
                 with h5py.File(self.dataset, "r") as handle:
@@ -84,33 +143,23 @@ class Annotator:
                     if path not in handle:
                         raise ValueError("Unknown episode")
                     demo = handle[path]
-                    frames = {
-                        camera: np.asarray(demo[f"obs/{camera}"], dtype=np.uint8)
-                        for camera in CAMERAS if f"obs/{camera}" in demo
-                    }
+                    cameras = [camera for camera in CAMERAS if f"obs/{camera}" in demo]
+                    if not cameras:
+                        raise ValueError("Episode has no recorded cameras")
+                    frames = [np.asarray(demo[f"obs/{camera}"], dtype=np.uint8) for camera in cameras]
+                    control_hz = float(json.loads(handle.attrs.get("metadata", "{}")).get("control_hz", 25))
+                video = encode_mosaic_video(frames, control_hz)
                 self.cached_episode = episode
-                self.cached_frames = frames
-                self.cache_bytes = sum(value.nbytes for value in frames.values())
+                self.cached_video = video
             return {
                 "episode": self.cached_episode,
-                "cameras": list(self.cached_frames),
-                "cache_bytes": self.cache_bytes,
+                "video_bytes": len(self.cached_video),
             }
 
-    def frame(self, episode, camera, index):
-        if camera not in CAMERAS:
-            raise ValueError("Unknown camera")
+    def video(self, episode):
         self.load_episode(episode)
         with self.io_lock:
-            if camera not in self.cached_frames:
-                raise ValueError("Unknown camera")
-            frames = self.cached_frames[camera]
-            if not 0 <= index < len(frames):
-                raise ValueError("Frame index out of range")
-            frame = frames[index]
-        if frame.ndim != 3 or frame.shape[-1] != 3:
-            raise ValueError(f"Expected HWC RGB frame, got {frame.shape}")
-        return np.ascontiguousarray(frame)
+            return self.cached_video
 
     def annotate(self, episode, status, notes):
         if status not in LABELS:
@@ -151,19 +200,11 @@ def make_handler(annotator):
                     self.send(200, json.dumps(annotator.summary()))
                 elif len(parts) == 3 and parts[:2] == ["api", "episode"]:
                     self.send(200, json.dumps(annotator.load_episode(parts[2])))
-                elif len(parts) == 5 and parts[:2] == ["api", "frame"]:
-                    frame = annotator.frame(parts[2], parts[3], int(parts[4]))
-                    self.send_response(200)
-                    self.send_header("Content-Type", "application/octet-stream")
-                    self.send_header("Content-Length", str(frame.nbytes))
-                    self.send_header("X-Width", str(frame.shape[1]))
-                    self.send_header("X-Height", str(frame.shape[0]))
-                    self.send_header("Cache-Control", "no-store")
-                    self.end_headers()
-                    self.wfile.write(frame.tobytes())
+                elif len(parts) == 3 and parts[:2] == ["api", "video"]:
+                    self.send(200, annotator.video(parts[2]), "video/mp4")
                 else:
                     self.send(404, "not found", "text/plain")
-            except (KeyError, OSError, ValueError) as error:
+            except (KeyError, OSError, RuntimeError, ValueError) as error:
                 self.send(400, str(error), "text/plain")
 
         def do_PUT(self):
@@ -197,6 +238,8 @@ def main(argv=None):
         parser.error(f"Dataset does not exist: {args.dataset}")
     if not 1 <= args.port <= 65535:
         parser.error("port must be between 1 and 65535")
+    if shutil.which("ffmpeg") is None:
+        parser.error("ffmpeg is required to create in-memory review videos")
     annotator = Annotator(args.dataset)
     annotator.summary()
     server = ThreadingHTTPServer((args.host, args.port), make_handler(annotator))
