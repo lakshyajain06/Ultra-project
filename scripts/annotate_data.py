@@ -31,14 +31,14 @@ main{padding:18px;overflow:auto}h1{font-size:19px;margin:0 0 6px}.muted{color:#9
 <div class="panel"><select id="status"></select><textarea id="notes" placeholder="Notes about this episode or label correction"></textarea><button id="save" class="primary">Save correction</button></div><div id="saved" class="saved"></div>
 <script>
 const cameras=['head_rgb','left_wrist_rgb','right_wrist_rgb'], labels=['success','aborted','timeout','interrupted','rejected','synthetic'];
-let info,current=null,frame=0,timer=null;
+let info,current=null,frame=0,playing=false,requestController=null;
 const $=id=>document.getElementById(id); labels.forEach(x=>$('status').add(new Option(x,x)));
 async function api(url,options){const r=await fetch(url,options);if(!r.ok)throw Error(await r.text());return r.headers.get('content-type')?.includes('json')?r.json():r.arrayBuffer()}
 function renderList(){const box=$('episodes');box.innerHTML='';info.episodes.forEach(ep=>{const b=document.createElement('button');b.className='episode'+(current?.name===ep.name?' active':'');b.innerHTML=`<b>${ep.name}</b><span>${ep.effective_status}${ep.annotated?' • corrected':''} · ${ep.samples} frames · ${ep.seconds.toFixed(1)}s</span>`;b.onclick=()=>select(ep);box.appendChild(b)})}
-function select(ep){stop();current=ep;frame=0;$('title').textContent=ep.name;$('details').textContent=`recorded: ${ep.recorded_status} · effective: ${ep.effective_status} · ${ep.samples} samples @ ${info.control_hz} Hz`;$('status').value=ep.effective_status;$('notes').value=ep.notes||'';$('frame').max=Math.max(0,ep.samples-1);$('frame').value=0;$('views').innerHTML='';ep.cameras.forEach(cam=>{$('views').insertAdjacentHTML('beforeend',`<div class="view"><label>${cam.replaceAll('_',' ')}</label><canvas id="${cam}"></canvas></div>`)});renderList();draw()}
-async function draw(){if(!current||!current.samples)return;$('counter').textContent=`${frame+1} / ${current.samples}`;$('frame').value=frame;await Promise.all(current.cameras.map(async cam=>{const r=await fetch(`/api/frame/${encodeURIComponent(current.name)}/${cam}/${frame}`);if(!r.ok)throw Error(await r.text());const w=+r.headers.get('X-Width'),h=+r.headers.get('X-Height'),rgb=new Uint8ClampedArray(await r.arrayBuffer()),rgba=new Uint8ClampedArray(w*h*4);for(let i=0,j=0;i<rgb.length;i+=3,j+=4){rgba[j]=rgb[i];rgba[j+1]=rgb[i+1];rgba[j+2]=rgb[i+2];rgba[j+3]=255}const c=$(cam);c.width=w;c.height=h;c.getContext('2d').putImageData(new ImageData(rgba,w,h),0,0)}))}
-function stop(){if(timer)clearInterval(timer);timer=null;$('play').textContent='Play'}
-function play(){if(timer){stop();return}$('play').textContent='Pause';timer=setInterval(()=>{if(frame>=current.samples-1){stop();return}frame++;draw()},1000/info.control_hz)}
+async function select(ep){stop();current=null;$('title').textContent=`Loading ${ep.name}…`;$('details').textContent='Reading this episode into memory once';const loaded=await api(`/api/episode/${encodeURIComponent(ep.name)}`);current=ep;frame=0;$('title').textContent=ep.name;$('details').textContent=`recorded: ${ep.recorded_status} · effective: ${ep.effective_status} · ${ep.samples} samples @ ${info.control_hz} Hz · ${(loaded.cache_bytes/1048576).toFixed(1)} MiB cached`;$('status').value=ep.effective_status;$('notes').value=ep.notes||'';$('frame').max=Math.max(0,ep.samples-1);$('frame').value=0;$('views').innerHTML='';ep.cameras.forEach(cam=>{$('views').insertAdjacentHTML('beforeend',`<div class="view"><label>${cam.replaceAll('_',' ')}</label><canvas id="${cam}"></canvas></div>`)});renderList();await draw()}
+async function draw(){if(!current||!current.samples)return false;if(requestController)requestController.abort();const controller=new AbortController();requestController=controller;const shownFrame=frame,shownEpisode=current;$('counter').textContent=`${shownFrame+1} / ${shownEpisode.samples}`;$('frame').value=shownFrame;try{await Promise.all(shownEpisode.cameras.map(async cam=>{const r=await fetch(`/api/frame/${encodeURIComponent(shownEpisode.name)}/${cam}/${shownFrame}`,{signal:controller.signal});if(!r.ok)throw Error(await r.text());const w=+r.headers.get('X-Width'),h=+r.headers.get('X-Height'),rgb=new Uint8ClampedArray(await r.arrayBuffer()),rgba=new Uint8ClampedArray(w*h*4);for(let i=0,j=0;i<rgb.length;i+=3,j+=4){rgba[j]=rgb[i];rgba[j+1]=rgb[i+1];rgba[j+2]=rgb[i+2];rgba[j+3]=255}if(current!==shownEpisode||frame!==shownFrame)return;const c=$(cam);c.width=w;c.height=h;c.getContext('2d').putImageData(new ImageData(rgba,w,h),0,0)}));return true}catch(e){if(e.name!=='AbortError')throw e;return false}}
+function stop(){playing=false;if(requestController)requestController.abort();$('play').textContent='Play'}
+async function play(){if(playing){stop();return}if(!current)return;playing=true;$('play').textContent='Pause';while(playing&&frame<current.samples){const started=performance.now(),shown=frame;if(!await draw()||!playing)break;if(shown>=current.samples-1){stop();break}const delay=Math.max(0,1000/info.control_hz-(performance.now()-started));await new Promise(resolve=>setTimeout(resolve,delay));if(playing&&frame===shown)frame++}}
 $('play').onclick=play;$('prev').onclick=()=>{stop();frame=Math.max(0,frame-1);draw()};$('frame').oninput=e=>{stop();frame=+e.target.value;draw()};
 $('save').onclick=async()=>{if(!current)return;const result=await api(`/api/annotation/${encodeURIComponent(current.name)}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:$('status').value,notes:$('notes').value})});Object.assign(current,result.episode);$('saved').textContent=`Saved to ${result.path}`;renderList();setTimeout(()=>$('saved').textContent='',2500)};
 api('/api/dataset').then(x=>{info=x;$('dataset').textContent=`${x.dataset}\n${x.task}`;renderList();if(x.episodes.length)select(x.episodes[0])}).catch(e=>document.body.textContent=e);
@@ -49,6 +49,9 @@ class Annotator:
     def __init__(self, dataset):
         self.dataset = Path(dataset).resolve()
         self.io_lock = threading.Lock()
+        self.cached_episode = None
+        self.cached_frames = {}
+        self.cache_bytes = 0
 
     def summary(self):
         with self.io_lock, h5py.File(self.dataset, "r") as handle:
@@ -72,17 +75,39 @@ class Annotator:
             "control_hz": control_hz, "episodes": episodes,
         }
 
+    def load_episode(self, episode):
+        """Replace the bounded cache with all camera frames for one episode."""
+        with self.io_lock:
+            if self.cached_episode != episode:
+                with h5py.File(self.dataset, "r") as handle:
+                    path = f"data/{episode}"
+                    if path not in handle:
+                        raise ValueError("Unknown episode")
+                    demo = handle[path]
+                    frames = {
+                        camera: np.asarray(demo[f"obs/{camera}"], dtype=np.uint8)
+                        for camera in CAMERAS if f"obs/{camera}" in demo
+                    }
+                self.cached_episode = episode
+                self.cached_frames = frames
+                self.cache_bytes = sum(value.nbytes for value in frames.values())
+            return {
+                "episode": self.cached_episode,
+                "cameras": list(self.cached_frames),
+                "cache_bytes": self.cache_bytes,
+            }
+
     def frame(self, episode, camera, index):
         if camera not in CAMERAS:
             raise ValueError("Unknown camera")
-        with self.io_lock, h5py.File(self.dataset, "r") as handle:
-            path = f"data/{episode}/obs/{camera}"
-            if path not in handle:
-                raise ValueError("Unknown episode or camera")
-            dataset = handle[path]
-            if not 0 <= index < len(dataset):
+        self.load_episode(episode)
+        with self.io_lock:
+            if camera not in self.cached_frames:
+                raise ValueError("Unknown camera")
+            frames = self.cached_frames[camera]
+            if not 0 <= index < len(frames):
                 raise ValueError("Frame index out of range")
-            frame = np.asarray(dataset[index], dtype=np.uint8)
+            frame = frames[index]
         if frame.ndim != 3 or frame.shape[-1] != 3:
             raise ValueError(f"Expected HWC RGB frame, got {frame.shape}")
         return np.ascontiguousarray(frame)
@@ -124,6 +149,8 @@ def make_handler(annotator):
                     self.send(200, HTML, "text/html; charset=utf-8")
                 elif parts == ["api", "dataset"]:
                     self.send(200, json.dumps(annotator.summary()))
+                elif len(parts) == 3 and parts[:2] == ["api", "episode"]:
+                    self.send(200, json.dumps(annotator.load_episode(parts[2])))
                 elif len(parts) == 5 and parts[:2] == ["api", "frame"]:
                     frame = annotator.frame(parts[2], parts[3], int(parts[4]))
                     self.send_response(200)
