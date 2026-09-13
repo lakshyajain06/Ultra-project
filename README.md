@@ -235,6 +235,30 @@ uv run --locked python scripts/replay_ultra.py datasets/ultra_002.hdf5 \
 select a smaller interval. Replay restores the recorded robot, cube, and plate
 initial state before applying the exact saved 22-joint action sequence.
 
+### Review and correct episode labels
+
+Start the browser annotator on localhost:
+
+```bash
+uv run --locked python scripts/annotate_data.py datasets/ultra_002.hdf5 --port 8000
+```
+
+Open `http://127.0.0.1:8000`, select an episode, play or scrub its synchronized
+head and wrist frames, choose the corrected status, add optional notes, and
+save. Corrections update the episode attributes in the HDF5 file directly.
+`original_status` preserves the first recorded label, while `status`, `success`,
+`annotation_notes`, and `annotated_utc` reflect the review. Do not collect,
+replay, or train from the same file while the annotator is running.
+
+For access from another machine on a trusted LAN, bind all interfaces:
+
+```bash
+uv run --locked python scripts/annotate_data.py datasets/ultra_002.hdf5 \
+  --host 0.0.0.0 --port 8000
+```
+
+The server has no authentication; do not expose it to the public internet.
+
 ### Verification without a headset
 
 ```bash
