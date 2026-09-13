@@ -182,8 +182,9 @@ starting the next attempt.
 The local HDF5 schema is versioned; it is not a claim of compatibility with
 Isaac Lab Mimic or LeRobot's dataset schema. Each `data/demo_XXXXXX` contains:
 
-- `obs` and `next_obs`: the canonical 22-D `proprio` state, raw 24 joint
-  positions/velocities, both palm poses, cube pose and plate pose, plus
+- `obs` and `next_obs`: the canonical 22-D `proprio` state, raw full-articulation
+  joint positions/velocities/accelerations/torques/targets, per-link world
+  poses/velocities, both palm poses, cube pose and plate pose, plus
   synchronized `head_rgb`, `left_wrist_rgb`, and `right_wrist_rgb` uint8 images
   paired before/after the action;
 - `actions`: the executed 22 joint-position targets, ordered torso[6], left
@@ -200,6 +201,9 @@ New recordings use schema version 6 and store `proprio` directly, in the same
 22-D layout consumed by the manager environment and ACT pipeline. Older
 schema-4/5 recordings remain readable; the training loader reconstructs their
 state from the raw joint and body-relative end-effector fields.
+The raw stream also includes full-articulation joint accelerations, applied
+torques, commanded targets, per-link world poses and velocities, object state,
+Quest packets, Cartesian targets, and camera frames for future reprocessing.
 
 Dataset metadata includes joint names, action units, quaternion convention,
 tool rotation offset, task text, seed, control rate, package versions, and hashes

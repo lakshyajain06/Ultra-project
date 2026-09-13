@@ -77,6 +77,15 @@ class UltraTeleopEnv(gym.Env):
             "proprio": gym.spaces.Box(-np.inf, np.inf, (22,), np.float32),
             "joint_pos": gym.spaces.Box(-np.inf, np.inf, (24,), np.float32),
             "joint_vel": gym.spaces.Box(-np.inf, np.inf, (24,), np.float32),
+            "joint_acc": gym.spaces.Box(-np.inf, np.inf, (24,), np.float32),
+            "joint_torque": gym.spaces.Box(-np.inf, np.inf, (24,), np.float32),
+            "joint_target": gym.spaces.Box(-np.inf, np.inf, (22,), np.float32),
+            "body_link_pose_w": gym.spaces.Box(
+                -np.inf, np.inf, (*self.robot.data.body_link_pose_w.shape[1:],), np.float32,
+            ),
+            "body_link_vel_w": gym.spaces.Box(
+                -np.inf, np.inf, (*self.robot.data.body_link_vel_w.shape[1:],), np.float32,
+            ),
             "eef_pose": gym.spaces.Box(-np.inf, np.inf, (2, 7), np.float32),
             "eef_pose_body": gym.spaces.Box(-np.inf, np.inf, (2, 7), np.float32),
             "body_pose": gym.spaces.Box(-np.inf, np.inf, (7,), np.float32),
@@ -94,11 +103,20 @@ class UltraTeleopEnv(gym.Env):
         eef_pose = numpy(self.robot.data.body_link_pose_w)[0, self.eef_ids]
         joint_pos = numpy(self.robot.data.joint_pos)[0]
         joint_vel = numpy(self.robot.data.joint_vel)[0]
+        joint_acc = numpy(self.robot.data.joint_acc)[0]
+        joint_torque = numpy(self.robot.data.applied_torque)[0]
+        body_link_pose_w = numpy(self.robot.data.body_link_pose_w)[0]
+        body_link_vel_w = numpy(self.robot.data.body_link_vel_w)[0]
         eef_pose_body = np.stack([relative_pose(pose, body_pose) for pose in eef_pose])
         observation = {
             "proprio": build_task_proprioception(joint_pos, eef_pose_body, self.torso_ids, self.gripper_ids),
             "joint_pos": joint_pos,
             "joint_vel": joint_vel,
+            "joint_acc": joint_acc,
+            "joint_torque": joint_torque,
+            "joint_target": numpy(self.controller.target)[0],
+            "body_link_pose_w": body_link_pose_w,
+            "body_link_vel_w": body_link_vel_w,
             "eef_pose": eef_pose,
             "eef_pose_body": eef_pose_body,
             "body_pose": body_pose,
