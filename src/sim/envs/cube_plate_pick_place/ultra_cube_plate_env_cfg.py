@@ -15,7 +15,7 @@ from isaaclab.utils.configclass import configclass
 from sim import ULTRA_CONTROLLED_JOINT_NAMES
 
 from . import mdp
-from .scene_cfg import ROBOT_CAMERA_PATHS, UltraTabletopSceneCfg, robot_camera_cfg
+from .ultra_tabletop_scene_cfg import ROBOT_CAMERA_PATHS, UltraTabletopSceneCfg, robot_camera_cfg
 
 CAMERA_STREAMS = tuple(ROBOT_CAMERA_PATHS)
 

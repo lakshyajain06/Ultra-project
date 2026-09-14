@@ -148,7 +148,7 @@ class UltraTabletopSceneCfg(InteractiveSceneCfg):
 
     cube = RigidObjectCfg(
         prim_path="{ENV_REGEX_NS}/Cube",
-        spawn=sim_utils.CuboidCfg(size=(0.075, 0.075, 0.075), **_dynamic_material((0.10, 0.35, 0.95))),
+        spawn=sim_utils.CuboidCfg(size=(0.05, 0.05, 0.05), **_dynamic_material((0.10, 0.35, 0.95))),
         init_state=RigidObjectCfg.InitialStateCfg(pos=(-0.18, 0.12, 0.818)),
     )
     plate = RigidObjectCfg(

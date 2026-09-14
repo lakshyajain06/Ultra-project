@@ -33,7 +33,7 @@ class ManagerBasedRLConfigTests(unittest.TestCase):
     def test_registered_manager_environment(self):
         self.assertEqual(
             gym.spec("Isaac-Ultra-Cube-Plate-v0").kwargs["env_cfg_entry_point"],
-            "sim.envs.cube_plate_pick_place.env_cfg:UltraCubePlateEnvCfg",
+            "sim.envs.cube_plate_pick_place.ultra_cube_plate_env_cfg:UltraCubePlateEnvCfg",
         )
         cfg = UltraCubePlateEnvCfg(enabled_cameras=("head_rgb", "left_wrist_rgb", "right_wrist_rgb"))
         self.assertEqual(cfg.scene.num_envs, 64)
