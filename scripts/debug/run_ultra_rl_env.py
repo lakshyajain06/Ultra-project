@@ -38,18 +38,15 @@ app = launcher.app
 import torch
 from isaaclab.envs import ManagerBasedRLEnv
 from sim import ULTRA_CONTROLLED_JOINT_NAMES
-from sim.envs import CAMERA_STREAMS, UltraCubePlateEnvCfg, UltraCubePlateVisionEnvCfg
+from sim.envs import CAMERA_STREAMS, UltraCubePlateEnvCfg
 
 
 def main():
-    if args.vision:
-        cfg = UltraCubePlateVisionEnvCfg(
-            enabled_cameras=tuple(CAMERA_STREAMS if args.cameras is None else args.cameras),
-            camera_width=args.camera_width,
-            camera_height=args.camera_height,
-        )
-    else:
-        cfg = UltraCubePlateEnvCfg()
+    cfg = UltraCubePlateEnvCfg(
+        enabled_cameras=tuple(CAMERA_STREAMS if args.vision and args.cameras is None else args.cameras or ()),
+        camera_width=args.camera_width,
+        camera_height=args.camera_height,
+    )
     cfg.scene.num_envs = args.num_envs
     cfg.sim.device = args.device
     env = ManagerBasedRLEnv(cfg=cfg)
@@ -80,14 +77,6 @@ def main():
         if args.vision:
             enabled = CAMERA_STREAMS if args.cameras is None else args.cameras
             expected.update({key: (args.num_envs, args.camera_height, args.camera_width, 3) for key in enabled})
-        else:
-            expected.update(
-                {
-                    "eef_pose_body": (args.num_envs, 2, 7),
-                    "cube_pose": (args.num_envs, 7),
-                    "plate_pose": (args.num_envs, 7),
-                }
-            )
         for key, shape in expected.items():
             if tuple(policy[key].shape) != shape or not torch.isfinite(policy[key]).all():
                 raise RuntimeError(f"Invalid {key}: shape={tuple(policy[key].shape)}")

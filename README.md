@@ -306,11 +306,9 @@ passive jaw followers, and joint velocities are not part of the default policy
 input. ACT's observation/action history captures short-term motion, while this
 smaller representation avoids redundant passive and kinematic coordinates.
 
-The state-only environment adds end-effector and cube/plate poses to its policy
-group for oracle-state experiments. The vision environment instead exposes only
-deployable `proprio` and RGB terms to `policy`; oracle object/kinematic terms are
-isolated in its `critic` group for optional asymmetric RL and should not be fed
-to an ACT policy.
+The manager environment exposes only deployable `proprio` and any requested RGB
+terms to `policy`. Cube/plate truth is used by reward and termination managers,
+not exposed as a policy observation.
 
 Success is deliberately stricter than center overlap. The cube footprint must
 fit within the circular plate in the plate's local frame, its center must be at
@@ -331,10 +329,10 @@ uv run --locked python scripts/debug/run_ultra_rl_env.py --viz none --num_envs 4
 uv run --locked python scripts/debug/run_ultra_rl_env.py --viz none --steps 10 --check-success
 ```
 
-Use `--vision` to select `UltraCubePlateVisionEnvCfg`, which adds float32 HWC
-`head_rgb`, `left_wrist_rgb`, and `right_wrist_rgb` policy observations in the
-same 0..255 value range and at the same default 320x240 resolution as the HDF5
-data. Each attached robot camera is independently optional:
+Use `--vision` to enable float32 HWC `head_rgb`, `left_wrist_rgb`, and
+`right_wrist_rgb` policy observations in the same 0..255 value range and at the
+same default 320x240 resolution as the HDF5 data. Each attached robot camera is
+independently optional:
 
 ```bash
 # Head and right wrist only, at a smaller resolution.
@@ -342,11 +340,11 @@ uv run --locked python scripts/debug/run_ultra_rl_env.py --viz none --vision \
   --cameras head_rgb right_wrist_rgb --camera-width 160 --camera-height 120
 ```
 
-In Python, pass `enabled_cameras=("head_rgb",)` to
-`UltraCubePlateVisionEnvCfg`, or call `configure_cameras(cfg, streams, width,
-height)` before constructing the environment. An empty stream tuple disables
-all cameras. The vision configuration defaults to one environment because RTX
-cameras are substantially more expensive than state observations.
+In Python, pass `enabled_cameras=("head_rgb",)` to `UltraCubePlateEnvCfg`, or
+call `configure_cameras(cfg, streams, width, height)` before constructing the
+environment. An empty stream tuple disables all cameras. RTX cameras are
+substantially more expensive than state observations, so choose `num_envs`
+accordingly.
 ## Policy behavior-cloning training
 
 The default `model=act trainer=act` configuration selects a compact Action

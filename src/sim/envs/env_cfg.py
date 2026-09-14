@@ -10,49 +10,14 @@ from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.managers import RewardTermCfg as RewTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.managers import TerminationTermCfg as DoneTerm
-from isaaclab.sensors import CameraCfg
 from isaaclab.utils.configclass import configclass
 
 from sim import ULTRA_CONTROLLED_JOINT_NAMES, UltraTabletopSceneCfg
+from sim.scene_cfg import ROBOT_CAMERA_PATHS, robot_camera_cfg
 
 from . import mdp
 
-_ROBOT_CAMERA_CHAIN = "Geometry/world/fr30_1/fr30_2/fr30_3/fr30_4/fr30_5/fr30_6"
-CAMERA_STREAMS = ("head_rgb", "left_wrist_rgb", "right_wrist_rgb")
-_CAMERA_PATHS = {
-    "head_rgb": f"{{ENV_REGEX_NS}}/Ultra/{_ROBOT_CAMERA_CHAIN}/zed_left",
-    "left_wrist_rgb": (
-        f"{{ENV_REGEX_NS}}/Ultra/{_ROBOT_CAMERA_CHAIN}/la_1/la_2/la_3/la_4/la_5/la_6/la_gripper/la_wrist_fisheye"
-    ),
-    "right_wrist_rgb": (
-        f"{{ENV_REGEX_NS}}/Ultra/{_ROBOT_CAMERA_CHAIN}/ra_1/ra_2/ra_3/ra_4/ra_5/ra_6/ra_gripper/ra_wrist_fisheye"
-    ),
-}
-
-
-def _robot_camera(prim_path: str, width: int = 320, height: int = 240) -> CameraCfg:
-    return CameraCfg(
-        prim_path=prim_path,
-        spawn=None,
-        update_period=0.04,
-        height=height,
-        width=width,
-        data_types=["rgb"],
-    )
-
-
-@configclass
-class UltraRLSceneCfg(UltraTabletopSceneCfg):
-    """Manager scene sharing the same ground and appearance as teleoperation."""
-
-
-@configclass
-class UltraVisionSceneCfg(UltraRLSceneCfg):
-    """Ultra scene with the three camera streams present in collected datasets."""
-
-    head_camera = _robot_camera(_CAMERA_PATHS["head_rgb"])
-    left_wrist_camera = _robot_camera(_CAMERA_PATHS["left_wrist_rgb"])
-    right_wrist_camera = _robot_camera(_CAMERA_PATHS["right_wrist_rgb"])
+CAMERA_STREAMS = tuple(ROBOT_CAMERA_PATHS)
 
 
 @configclass
@@ -72,42 +37,8 @@ class ActionsCfg:
 
 @configclass
 class ObservationsCfg:
-    """Oracle state policy observations for non-visual RL experiments."""
+    """Deployable policy observations, with optional robot cameras."""
 
-    @configclass
-    class PolicyCfg(ObsGroup):
-        proprio = ObsTerm(
-            func=mdp.proprioception,
-            params={
-                "torso_cfg": SceneEntityCfg(
-                    "robot", joint_names=[f"torso_j{i}" for i in range(1, 7)], preserve_order=True
-                ),
-                "eef_cfg": SceneEntityCfg("robot", body_names=["la_gripper", "ra_gripper"], preserve_order=True),
-                "body_cfg": SceneEntityCfg("robot", body_names=["fr30_6"]),
-                "gripper_cfg": SceneEntityCfg(
-                    "robot", joint_names=["la_gripper_joint", "ra_gripper_joint"], preserve_order=True
-                ),
-            },
-        )
-        eef_pose_body = ObsTerm(
-            func=mdp.eef_pose_body,
-            params={
-                "eef_cfg": SceneEntityCfg("robot", body_names=["la_gripper", "ra_gripper"], preserve_order=True),
-                "body_cfg": SceneEntityCfg("robot", body_names=["fr30_6"]),
-            },
-        )
-        cube_pose = ObsTerm(func=mdp.object_pose, params={"asset_cfg": SceneEntityCfg("cube")})
-        plate_pose = ObsTerm(func=mdp.object_pose, params={"asset_cfg": SceneEntityCfg("plate")})
-
-        def __post_init__(self):
-            self.enable_corruption = False
-            self.concatenate_terms = False
-
-    policy: PolicyCfg = PolicyCfg()
-
-
-@configclass
-class VisionObservationsCfg(ObservationsCfg):
     @configclass
     class PolicyCfg(ObsGroup):
         proprio = ObsTerm(
@@ -132,7 +63,6 @@ class VisionObservationsCfg(ObservationsCfg):
             self.concatenate_terms = False
 
     policy: PolicyCfg = PolicyCfg()
-    critic: ObservationsCfg.PolicyCfg = ObservationsCfg.PolicyCfg()
 
 
 @configclass
@@ -180,14 +110,17 @@ class TerminationsCfg:
 
 @configclass
 class UltraCubePlateEnvCfg(ManagerBasedRLEnvCfg):
-    """State-based, vectorized Ultra cube-on-plate environment."""
+    """Vectorized Ultra cube-on-plate environment with optional cameras."""
 
-    scene: UltraRLSceneCfg = UltraRLSceneCfg(num_envs=64, env_spacing=3.0)
+    scene: UltraTabletopSceneCfg = UltraTabletopSceneCfg(num_envs=64, env_spacing=3.0)
     observations: ObservationsCfg = ObservationsCfg()
     actions: ActionsCfg = ActionsCfg()
     events: EventsCfg = EventsCfg()
     rewards: RewardsCfg = RewardsCfg()
     terminations: TerminationsCfg = TerminationsCfg()
+    enabled_cameras: tuple[str, ...] = ()
+    camera_width: int = 320
+    camera_height: int = 240
 
     def __post_init__(self):
         self.decimation = 2
@@ -198,27 +131,13 @@ class UltraCubePlateEnvCfg(ManagerBasedRLEnvCfg):
         self.viewer.lookat = (0.0, 0.65, 0.80)
         # The generic capture camera is unrelated to the demonstration streams.
         self.scene.camera = None
-
-
-@configclass
-class UltraCubePlateVisionEnvCfg(UltraCubePlateEnvCfg):
-    """Camera-enabled evaluation config matching the recorded RGB streams."""
-
-    scene: UltraVisionSceneCfg = UltraVisionSceneCfg(num_envs=1, env_spacing=3.0)
-    observations: VisionObservationsCfg = VisionObservationsCfg()
-    enabled_cameras: tuple[str, ...] = CAMERA_STREAMS
-    camera_width: int = 320
-    camera_height: int = 240
-
-    def __post_init__(self):
-        super().__post_init__()
         configure_cameras(self, self.enabled_cameras, self.camera_width, self.camera_height)
-        self.num_rerenders_on_reset = 1
+        self.num_rerenders_on_reset = int(bool(self.enabled_cameras))
 
 
 def configure_cameras(
-    cfg: UltraCubePlateVisionEnvCfg,
-    enabled: tuple[str, ...] | list[str] = CAMERA_STREAMS,
+    cfg: UltraCubePlateEnvCfg,
+    enabled: tuple[str, ...] | list[str],
     width: int = 320,
     height: int = 240,
 ) -> None:
@@ -231,7 +150,7 @@ def configure_cameras(
     enabled = set(enabled)
     for stream in CAMERA_STREAMS:
         sensor_name = stream.removesuffix("_rgb") + "_camera"
-        sensor_cfg = _robot_camera(_CAMERA_PATHS[stream], width, height) if stream in enabled else None
+        sensor_cfg = robot_camera_cfg(stream, width, height) if stream in enabled else None
         observation_cfg = (
             ObsTerm(func=mdp.camera_rgb, params={"sensor_cfg": SceneEntityCfg(sensor_name)})
             if stream in enabled

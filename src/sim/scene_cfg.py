@@ -8,6 +8,34 @@ from isaaclab.utils.configclass import configclass
 
 from .robots.ultra import ULTRA_CFG
 
+ROBOT_CAMERA_PATHS = {
+    "head_rgb": "{ENV_REGEX_NS}/Ultra/Geometry/world/fr30_1/fr30_2/fr30_3/fr30_4/fr30_5/fr30_6/zed_left",
+    "left_wrist_rgb": (
+        "{ENV_REGEX_NS}/Ultra/Geometry/world/fr30_1/fr30_2/fr30_3/fr30_4/fr30_5/fr30_6/"
+        "la_1/la_2/la_3/la_4/la_5/la_6/la_gripper/la_wrist_fisheye"
+    ),
+    "right_wrist_rgb": (
+        "{ENV_REGEX_NS}/Ultra/Geometry/world/fr30_1/fr30_2/fr30_3/fr30_4/fr30_5/fr30_6/"
+        "ra_1/ra_2/ra_3/ra_4/ra_5/ra_6/ra_gripper/ra_wrist_fisheye"
+    ),
+}
+
+
+def robot_camera_cfg(stream: str, width: int = 320, height: int = 240) -> CameraCfg:
+    """Configure one of the RGB cameras already authored on the robot."""
+    try:
+        prim_path = ROBOT_CAMERA_PATHS[stream]
+    except KeyError as error:
+        raise ValueError(f"Unknown robot camera stream: {stream}") from error
+    return CameraCfg(
+        prim_path=prim_path,
+        spawn=None,
+        update_period=0.04,
+        height=height,
+        width=width,
+        data_types=["rgb"],
+    )
+
 
 def _static_box(size, color):
     return sim_utils.CuboidCfg(

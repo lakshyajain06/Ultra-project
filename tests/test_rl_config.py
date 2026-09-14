@@ -8,7 +8,7 @@ import torch
 from isaaclab.managers import SceneEntityCfg
 from data.schema import TASK_STATE_NAMES, ULTRA_ACTION_JOINT_NAMES
 from sim import ULTRA_CONTROLLED_JOINT_NAMES
-from sim.envs import UltraCubePlateEnvCfg, UltraCubePlateVisionEnvCfg, configure_cameras, mdp
+from sim.envs import UltraCubePlateEnvCfg, configure_cameras, mdp
 
 
 def _asset(**values):
@@ -29,21 +29,22 @@ class ManagerBasedRLConfigTests(unittest.TestCase):
         self.assertEqual(proprio["eef_cfg"].body_names, ["la_gripper", "ra_gripper"])
         self.assertEqual(proprio["gripper_cfg"].joint_names, ["la_gripper_joint", "ra_gripper_joint"])
 
-    def test_registered_state_and_vision_variants(self):
+    def test_registered_manager_environment(self):
         self.assertEqual(
             gym.spec("Isaac-Ultra-Cube-Plate-v0").kwargs["env_cfg_entry_point"],
             "sim.envs.env_cfg:UltraCubePlateEnvCfg",
         )
-        cfg = UltraCubePlateVisionEnvCfg()
-        self.assertEqual(cfg.scene.num_envs, 1)
+        cfg = UltraCubePlateEnvCfg(enabled_cameras=("head_rgb", "left_wrist_rgb", "right_wrist_rgb"))
+        self.assertEqual(cfg.scene.num_envs, 64)
         self.assertIsNotNone(cfg.scene.head_camera)
         self.assertEqual(cfg.scene.head_camera.width, 320)
         self.assertEqual(cfg.scene.head_camera.height, 240)
         self.assertIsNotNone(cfg.observations.policy.head_rgb)
-        self.assertIsNotNone(cfg.observations.critic.cube_pose)
+        with self.assertRaises(gym.error.Error):
+            gym.spec("Isaac-Ultra-Cube-Plate-Vision-v0")
 
     def test_cameras_can_be_independently_configured(self):
-        cfg = UltraCubePlateVisionEnvCfg(enabled_cameras=("head_rgb",), camera_width=160, camera_height=120)
+        cfg = UltraCubePlateEnvCfg(enabled_cameras=("head_rgb",), camera_width=160, camera_height=120)
         self.assertEqual(cfg.scene.head_camera.width, 160)
         self.assertIsNone(cfg.scene.left_wrist_camera)
         self.assertIsNone(cfg.observations.policy.right_wrist_rgb)

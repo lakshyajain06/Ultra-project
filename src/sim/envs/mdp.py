@@ -16,12 +16,6 @@ def _tensor(value):
     return getattr(value, "torch", value)
 
 
-def _local_pose(pose_w: torch.Tensor, env: ManagerBasedEnv) -> torch.Tensor:
-    pose = pose_w.clone()
-    pose[:, :3] -= env.scene.env_origins
-    return pose
-
-
 class BoundedJointPositionAction(JointPositionAction):
     """Absolute joint targets clipped to the articulation's authored limits."""
 
@@ -29,14 +23,6 @@ class BoundedJointPositionAction(JointPositionAction):
         super().process_actions(actions)
         limits = _tensor(self._asset.data.joint_pos_limits)[:, self._joint_ids]
         self._processed_actions = torch.clamp(self._processed_actions, min=limits[..., 0], max=limits[..., 1])
-
-
-def joint_pos(env: ManagerBasedEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
-    return _tensor(env.scene[asset_cfg.name].data.joint_pos)[:, asset_cfg.joint_ids]
-
-
-def joint_vel(env: ManagerBasedEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
-    return _tensor(env.scene[asset_cfg.name].data.joint_vel)[:, asset_cfg.joint_ids]
 
 
 def proprioception(
@@ -82,47 +68,6 @@ def proprioception(
         ),
         dim=-1,
     )
-
-
-def body_pose(
-    env: ManagerBasedEnv,
-    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names=["fr30_6"]),
-) -> torch.Tensor:
-    robot = env.scene[asset_cfg.name]
-    return _local_pose(_tensor(robot.data.body_link_pose_w)[:, asset_cfg.body_ids[0]], env)
-
-
-def eef_pose(
-    env: ManagerBasedEnv,
-    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names=["la_gripper", "ra_gripper"], preserve_order=True),
-) -> torch.Tensor:
-    robot = env.scene[asset_cfg.name]
-    poses = _tensor(robot.data.body_link_pose_w)[:, asset_cfg.body_ids]
-    poses = poses.clone()
-    poses[..., :3] -= env.scene.env_origins[:, None, :]
-    return poses
-
-
-def eef_pose_body(
-    env: ManagerBasedEnv,
-    eef_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names=["la_gripper", "ra_gripper"], preserve_order=True),
-    body_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names=["fr30_6"]),
-) -> torch.Tensor:
-    robot = env.scene[eef_cfg.name]
-    poses = _tensor(robot.data.body_link_pose_w)
-    reference = poses[:, body_cfg.body_ids[0]]
-    relative = []
-    for body_id in eef_cfg.body_ids:
-        target = poses[:, body_id]
-        position, quaternion = subtract_frame_transforms(
-            reference[:, :3], reference[:, 3:7], target[:, :3], target[:, 3:7]
-        )
-        relative.append(torch.cat((position, quaternion), dim=-1))
-    return torch.stack(relative, dim=1)
-
-
-def object_pose(env: ManagerBasedEnv, asset_cfg: SceneEntityCfg) -> torch.Tensor:
-    return _local_pose(_tensor(env.scene[asset_cfg.name].data.root_pose_w), env)
 
 
 def camera_rgb(env: ManagerBasedEnv, sensor_cfg: SceneEntityCfg) -> torch.Tensor:

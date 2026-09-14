@@ -137,7 +137,7 @@ with capture_isaac_output():
     from isaaclab.sensors import CameraCfg
 
     from sim import ULTRA_CONTROLLED_JOINT_NAMES
-    from sim.envs import CAMERA_STREAMS, UltraCubePlateEnvCfg, UltraCubePlateVisionEnvCfg
+    from sim.envs import CAMERA_STREAMS, UltraCubePlateEnvCfg
 
 
 THIRD_PERSON_EYE = (3.5, 5.0, 2.4)
@@ -149,14 +149,9 @@ def _tensor(value):
     return getattr(value, "torch", value)
 
 
-def _policy_observation(observations, env, joint_ids):
-    """Add manager critic terms and canonical joint state for legacy checkpoints."""
-    observation = dict(observations["policy"])
-    observation.update(observations.get("critic", {}))
-    robot = env.scene["robot"]
-    observation["joint_pos"] = _tensor(robot.data.joint_pos)[:, joint_ids]
-    observation["joint_vel"] = _tensor(robot.data.joint_vel)[:, joint_ids]
-    return observation
+def _policy_observation(observations):
+    """Return the policy-facing manager observations."""
+    return observations["policy"]
 
 
 def _outcome(env, env_index, terminated, truncated):
@@ -256,14 +251,11 @@ def main():
         )
 
     recording_cameras = CAMERA_STREAMS if args.record_dir else policy.camera_names
-    if recording_cameras:
-        cfg = UltraCubePlateVisionEnvCfg(
-            enabled_cameras=recording_cameras,
-            camera_width=args.camera_width,
-            camera_height=args.camera_height,
-        )
-    else:
-        cfg = UltraCubePlateEnvCfg()
+    cfg = UltraCubePlateEnvCfg(
+        enabled_cameras=recording_cameras,
+        camera_width=args.camera_width,
+        camera_height=args.camera_height,
+    )
     cfg.scene.num_envs = args.num_envs
     cfg.scene.env_spacing = args.env_spacing
     cfg.sim.device = args.device
@@ -303,7 +295,7 @@ def main():
             observations, _ = env.reset(seed=args.seed)
         print("Environment ready. Running evaluation...", flush=True)
         robot = env.scene["robot"]
-        joint_ids, joint_names = robot.find_joints(ULTRA_CONTROLLED_JOINT_NAMES, preserve_order=True)
+        _, joint_names = robot.find_joints(ULTRA_CONTROLLED_JOINT_NAMES, preserve_order=True)
         if tuple(joint_names) != ULTRA_CONTROLLED_JOINT_NAMES:
             raise RuntimeError(f"Environment action joint order mismatch: {joint_names}")
 
@@ -317,7 +309,7 @@ def main():
             for env_index in range(initial_count):
                 recorder.start(env_index, int(episode_ids[env_index]), observations, env)
         while len(results) < args.episodes and app.is_running():
-            chunks = policy.predict(_policy_observation(observations, env, joint_ids))
+            chunks = policy.predict(_policy_observation(observations))
             if chunks.shape[0] != args.num_envs or not np.isfinite(chunks).all():
                 raise RuntimeError("Policy emitted a non-finite action")
             for chunk_index in range(args.chunk_steps):

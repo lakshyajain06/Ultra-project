@@ -5,10 +5,10 @@ import numpy as np
 import torch
 import isaaclab.sim as sim_utils
 from isaaclab.scene import InteractiveScene
-from isaaclab.sensors import CameraCfg
 from isaaclab.sim import SimulationContext
 
 from sim import UltraJointPositionController, UltraTabletopSceneCfg
+from sim.scene_cfg import ROBOT_CAMERA_PATHS, robot_camera_cfg
 from sim.robots.ultra import as_torch
 from .control import build_task_proprioception, compose_pose, relative_pose, solve_ik
 
@@ -36,24 +36,10 @@ class UltraTeleopEnv(gym.Env):
         if enable_cameras:
             if camera_width <= 0 or camera_height <= 0:
                 raise ValueError("Camera width and height must be positive")
-            chain = "Geometry/world/fr30_1/fr30_2/fr30_3/fr30_4/fr30_5/fr30_6"
-            camera_paths = {
-                "head_camera": f"{{ENV_REGEX_NS}}/Ultra/{chain}/zed_left",
-                "left_wrist_camera": (
-                    f"{{ENV_REGEX_NS}}/Ultra/{chain}/la_1/la_2/la_3/la_4/la_5/la_6/"
-                    "la_gripper/la_wrist_fisheye"
-                ),
-                "right_wrist_camera": (
-                    f"{{ENV_REGEX_NS}}/Ultra/{chain}/ra_1/ra_2/ra_3/ra_4/ra_5/ra_6/"
-                    "ra_gripper/ra_wrist_fisheye"
-                ),
-            }
-            for name, prim_path in camera_paths.items():
-                setattr(cfg, name, CameraCfg(
-                    prim_path=prim_path, spawn=None, update_period=self.control_dt,
-                    height=camera_height, width=camera_width, data_types=["rgb"],
-                ))
-            self.camera_names = tuple(camera_paths)
+            for stream in ROBOT_CAMERA_PATHS:
+                name = stream.removesuffix("_rgb") + "_camera"
+                setattr(cfg, name, robot_camera_cfg(stream, camera_width, camera_height))
+            self.camera_names = tuple(name.removesuffix("_rgb") + "_camera" for name in ROBOT_CAMERA_PATHS)
         self.scene = InteractiveScene(cfg)
         self.sim.reset()
         self.robot = self.scene["robot"]
