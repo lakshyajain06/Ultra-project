@@ -354,8 +354,8 @@ that class. The model-family registry is used separately to reconstruct models
 from checkpoints during inference. The
 HDF5 training pipeline runs outside Isaac Sim and uses
 only dependencies already present in the project. By default, each sample uses
-the 22D task-centric `proprio` vector, the head/left-wrist/right-wrist RGB frames,
-and predicts the next 25 absolute 22-joint targets. The state order is six torso
+the 22D task-centric `proprio` vector, the head/right-wrist RGB frames, and
+predicts the next 25 absolute 22-joint targets. The state order is six torso
 joint angles, left body-relative EEF xyz + XYZW quaternion, left gripper opening,
 right body-relative EEF xyz + XYZW quaternion, and right gripper opening. This
 mirrors the action's torso/left/right grouping while omitting arm angles and
@@ -364,7 +364,7 @@ The loader uses `observation_joint_names` metadata to select torso and gripper
 positions from legacy 24-DOF recordings and combines them with
 `obs/eef_pose_body`; the two passive jaw followers are never included.
 State and action statistics are fitted on the training episodes only and stored
-inside every checkpoint. Training uses one structured Hydra configuration with
+inside every checkpoint. Training uses one Hydra YAML configuration with
 `dataset`, `model`, `train`, and `wandb` sections; command-line values use
 Hydra's `section.key=value` override syntax.
 
@@ -391,14 +391,14 @@ validation sets. Use `train.seed`, `dataset.validation_fraction`,
 legacy 44D controlled q/qdot state remains available with
 `dataset.state_keys=[joint_pos,joint_vel]`. Cameras can be removed independently,
 including all of them (`dataset.camera_names=[]`), without changing the dataset
-format. Run with `--help` to inspect the complete typed configuration tree.
+format. Run with `--help` to inspect the fully composed configuration tree.
 Configuration files live under `src/learning/training/conf`; Hydra groups make
 presets composable, for example
 `model=act trainer=act train=debug wandb=offline`. Model
 parameters are overridden below the selected model, such as
 `model.parameters.hidden_dim=128`; ACT's KL weight is similarly configured as
-`model.training.kl_weight`. The experiment schema and selected model registry
-validate the fully composed configuration before training starts.
+`model.training.kl_weight`. Dataset and model implementations validate their
+resolved YAML mappings when they construct runtime objects.
 Adding another policy family requires its model and trainer implementations,
 matching Hydra files under `training/conf/model` and `training/conf/trainer`,
 and a checkpoint-loading entry in `learning.models.registry`; the generic

@@ -7,28 +7,26 @@ from pathlib import Path
 import hydra
 from hydra.utils import get_class
 from dotenv import load_dotenv
-from omegaconf import DictConfig, OmegaConf
-
-from learning.training.config import ExperimentConfig
+from omegaconf import DictConfig, OmegaConf, open_dict
 
 
 @hydra.main(config_path="../src/learning/training/conf", config_name="config")
 def train(config: DictConfig):
-    validated = OmegaConf.merge(OmegaConf.structured(ExperimentConfig), config)
-    if validated.output is None:
+    if config.output is None:
         timestamp = datetime.now().astimezone().strftime("%Y%m%d_%H%M%S_%z")
         output = Path("outputs/training") / timestamp
         suffix = 1
         while output.exists():
             output = Path("outputs/training") / f"{timestamp}_{suffix:02d}"
             suffix += 1
-        validated.output = str(output)
-    output = Path(validated.output)
+        with open_dict(config):
+            config.output = str(output)
+    output = Path(config.output)
     output.mkdir(parents=True, exist_ok=True)
-    (output / "config.yaml").write_text(OmegaConf.to_yaml(validated, resolve=True))
+    (output / "config.yaml").write_text(OmegaConf.to_yaml(config, resolve=True))
 
-    experiment = OmegaConf.to_object(validated)
-    target = str(validated.trainer["_target_"])
+    experiment = OmegaConf.to_container(config, resolve=True)
+    target = str(config.trainer["_target_"])
     if not target.startswith("learning.training."):
         raise ValueError(f"Trainer target must be in learning.training, got {target!r}")
     trainer_type = get_class(target)

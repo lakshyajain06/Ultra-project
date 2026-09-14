@@ -54,9 +54,7 @@ class WandbTracker:
 
 def experiment_config(config, model_config, model_name=None, model_training=None):
     """Return a JSON-compatible snapshot for the wandb run configuration."""
-    from dataclasses import asdict
-
-    model = model_config.to_dict()
+    model = dict(model_config)
     if model_name is not None:
         model = {"name": model_name, "parameters": model, "training": model_training or {}}
-    return json.loads(json.dumps({**asdict(config), "model": model}))
+    return json.loads(json.dumps({**config, "model": model}))

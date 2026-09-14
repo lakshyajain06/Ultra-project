@@ -1,7 +1,6 @@
 """Stateful policy training engine and self-contained checkpoints."""
 
 from abc import ABC, abstractmethod
-from dataclasses import asdict
 import json
 from pathlib import Path
 import random
@@ -12,23 +11,22 @@ import torch
 from torch.utils.data import DataLoader
 
 from data.datasets import Normalizer, build_datasets, dataset_manifest
-from .config import ExperimentConfig
 from .tracking import WandbTracker, experiment_config
 
 
 class PolicyTrainer(ABC):
     """Shared lifecycle for a trainer selected and instantiated by Hydra."""
 
-    def __init__(self, config: ExperimentConfig):
+    def __init__(self, config):
         self.config = config
-        self.device = "cuda" if config.device == "auto" and torch.cuda.is_available() else config.device
+        self.device = "cuda" if config["device"] == "auto" and torch.cuda.is_available() else config["device"]
         if self.device == "auto":
             self.device = "cpu"
-        self.output = Path(config.output)
-        self._seed_everything(config.train.seed)
-        self.train_data, self.validation_data, self.normalizer = build_datasets(config.dataset)
-        self.manifest = dataset_manifest(config.dataset, self.train_data, self.validation_data)
-        model = dict(config.model)
+        self.output = Path(config["output"])
+        self._seed_everything(config["train"]["seed"])
+        self.train_data, self.validation_data, self.normalizer = build_datasets(config["dataset"])
+        self.manifest = dataset_manifest(config["dataset"], self.train_data, self.validation_data)
+        model = dict(config["model"])
         self.model_name = model.pop("name")
         model_parameters = dict(model.pop("parameters", {}))
         self.model_training = dict(model.pop("training", {}))
@@ -39,18 +37,19 @@ class PolicyTrainer(ABC):
             model_parameters,
             state_dim=self.normalizer.state_mean.size,
             action_dim=self.normalizer.action_mean.size,
-            chunk_size=config.dataset.chunk_size,
-            camera_names=config.dataset.camera_names,
+            chunk_size=config["dataset"]["chunk_size"],
+            camera_names=config["dataset"]["camera_names"],
         )
         self.model.to(self.device)
         self.optimizer = torch.optim.AdamW(
-            self.model.parameters(), lr=config.train.learning_rate, weight_decay=config.train.weight_decay,
+            self.model.parameters(), lr=config["train"]["learning_rate"], weight_decay=config["train"]["weight_decay"],
         )
         self.start_epoch, self.step, self.best = 0, 0, float("inf")
-        if config.resume:
-            self.restore(config.resume)
+        if config["resume"]:
+            self.restore(config["resume"])
         self.validation_loader = DataLoader(
-            self.validation_data, batch_size=config.train.batch_size, num_workers=config.train.num_workers,
+            self.validation_data, batch_size=config["train"]["batch_size"],
+            num_workers=config["train"]["num_workers"],
         )
         self.action_std = torch.as_tensor(self.normalizer.action_std, device=self.device)
         self.output.mkdir(parents=True, exist_ok=True)
@@ -58,11 +57,11 @@ class PolicyTrainer(ABC):
 
     def fit(self):
         tracker = WandbTracker.start(
-            **asdict(self.config.wandb), output=self.output,
+            **self.config["wandb"], output=self.output,
             config=experiment_config(
                 self.config, self.model_config, self.model_name, self.model_training,
             ),
-            resume=self.config.resume is not None,
+            resume=self.config["resume"] is not None,
         )
         tracker.set_summary({
             "data/train_samples": len(self.train_data),
@@ -75,11 +74,11 @@ class PolicyTrainer(ABC):
             ),
         })
         try:
-            for epoch in range(self.start_epoch, self.config.train.epochs):
+            for epoch in range(self.start_epoch, self.config["train"]["epochs"]):
                 train_loader = DataLoader(
-                    self.train_data, batch_size=self.config.train.batch_size, shuffle=True,
-                    num_workers=self.config.train.num_workers,
-                    generator=torch.Generator().manual_seed(self.config.train.seed + epoch),
+                    self.train_data, batch_size=self.config["train"]["batch_size"], shuffle=True,
+                    num_workers=self.config["train"]["num_workers"],
+                    generator=torch.Generator().manual_seed(self.config["train"]["seed"] + epoch),
                 )
                 train_metrics = self.timed_epoch(train_loader, training=True)
                 validation_metrics = self.timed_epoch(self.validation_loader, training=False)
@@ -121,7 +120,7 @@ class PolicyTrainer(ABC):
                 )
                 reconstruction, metrics = self.loss_and_metrics(prediction, actions, is_pad)
                 loss, objective_metrics = self.objective(
-                    reconstruction, auxiliary, self.config.train, self.model_training,
+                    reconstruction, auxiliary, self.config["train"], self.model_training,
                 )
                 metrics.update(objective_metrics)
                 if training:
@@ -184,8 +183,8 @@ class PolicyTrainer(ABC):
         payload = {
             "model": self.model.state_dict(), "optimizer": self.optimizer.state_dict(),
             "model_name": self.model_name,
-            "model_config": self.model_config.to_dict(), "train_config": asdict(self.config.train),
-            "experiment_config": asdict(self.config), "normalizer": self.normalizer.to_dict(),
+            "model_config": self.model_config, "train_config": self.config["train"],
+            "experiment_config": self.config, "normalizer": self.normalizer.to_dict(),
             "manifest": self.manifest, "epoch": epoch, "step": self.step, "best_metric": self.best,
             "rng": {"python": random.getstate(), "numpy": np.random.get_state(), "torch": torch.get_rng_state()},
         }
@@ -199,7 +198,7 @@ class PolicyTrainer(ABC):
         payload = torch.load(path, map_location=self.device, weights_only=False)
         if payload["model_name"] != self.model_name:
             raise ValueError("Resume model family differs from the checkpoint")
-        if payload["model_config"] != self.model_config.to_dict():
+        if payload["model_config"] != self.model_config:
             raise ValueError("Resume model configuration differs from the checkpoint")
         if payload["manifest"] != self.manifest:
             raise ValueError("Resume dataset/split or dataset file fingerprint differs from the checkpoint")

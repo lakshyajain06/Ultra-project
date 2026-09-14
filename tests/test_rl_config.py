@@ -6,9 +6,7 @@ from types import SimpleNamespace
 import gymnasium as gym
 import torch
 from isaaclab.managers import SceneEntityCfg
-from data.datasets import DatasetConfig
 from data.schema import TASK_STATE_NAMES, ULTRA_ACTION_JOINT_NAMES
-from learning.models import ACTConfig
 from sim import ULTRA_CONTROLLED_JOINT_NAMES
 from sim.envs import UltraCubePlateEnvCfg, UltraCubePlateVisionEnvCfg, configure_cameras, mdp
 
@@ -190,10 +188,8 @@ class ManagerBasedRLConfigTests(unittest.TestCase):
         cfg = UltraCubePlateEnvCfg()
         self.assertEqual(tuple(cfg.actions.joint_position.joint_names), ULTRA_CONTROLLED_JOINT_NAMES)
         self.assertEqual(ULTRA_ACTION_JOINT_NAMES, ULTRA_CONTROLLED_JOINT_NAMES)
-        self.assertEqual(len(TASK_STATE_NAMES), ACTConfig().state_dim)
-        self.assertEqual(ACTConfig().state_dim, 22)
-        self.assertEqual(ACTConfig().action_dim, len(ULTRA_CONTROLLED_JOINT_NAMES))
-        self.assertEqual(DatasetConfig(paths=()).state_keys, ("proprio",))
+        self.assertEqual(len(TASK_STATE_NAMES), 22)
+        self.assertEqual(len(TASK_STATE_NAMES), len(ULTRA_CONTROLLED_JOINT_NAMES))
 
 
 if __name__ == "__main__":

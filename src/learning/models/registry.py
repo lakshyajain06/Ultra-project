@@ -1,18 +1,10 @@
 """Registry used to reconstruct policy models from checkpoints."""
 
-from dataclasses import dataclass
-
-from .act import ACTConfig, ACTPolicy
-
-
-@dataclass(frozen=True)
-class ModelFamily:
-    config_type: type
-    model_type: type
+from .act import ACTPolicy
 
 
 MODEL_FAMILIES = {
-    "act": ModelFamily(ACTConfig, ACTPolicy),
+    "act": ACTPolicy,
 }
 
 
@@ -24,7 +16,6 @@ def model_family(name):
 
 
 def load_model(name, config, state_dict):
-    family = model_family(name)
-    model = family.model_type(family.config_type.from_dict(config))
+    model = model_family(name)(config)
     model.load_state_dict(state_dict)
     return model

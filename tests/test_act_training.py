@@ -6,15 +6,14 @@ import tempfile
 import unittest
 
 import h5py
+from hydra import compose, initialize_config_dir
 import numpy as np
 import torch
-from omegaconf import OmegaConf
 from torch.utils.data import DataLoader
 
-from data.datasets import DatasetConfig, build_datasets, compose_task_state
+from data.datasets import build_datasets, compose_task_state
 from learning.inference import PolicyInference
-from learning.models import ACTConfig, ACTPolicy
-from learning.training.config import ExperimentConfig, TrainConfig
+from learning.models import ACTPolicy
 from learning.training.act_trainer import ACTTrainer
 from learning.training.tracking import WandbTracker, experiment_config
 
@@ -60,28 +59,28 @@ class ACTTrainingTests(unittest.TestCase):
         self.temporary.cleanup()
 
     def config(self, **overrides):
-        values = dict(paths=(str(self.path),), chunk_size=3, validation_fraction=0.5, seed=7)
+        values = dict(
+            paths=[str(self.path)], episode_keys=[], chunk_size=3, state_keys=["proprio"],
+            camera_names=list(CAMERAS), statuses=["success"], validation_fraction=0.5, seed=7,
+        )
         values.update(overrides)
-        return DatasetConfig(**values)
+        return values
 
-    def test_hydra_structured_config_round_trip(self):
-        structured = OmegaConf.structured(ExperimentConfig)
-        merged = OmegaConf.merge(structured, {
-            "dataset": {"paths": [str(self.path)], "camera_names": []},
-            "model": {"name": "act", "parameters": {"hidden_dim": 32}, "training": {"kl_weight": 0.1}},
-            "train": {"batch_size": 8},
-            "wandb": {"mode": "disabled"},
-        })
-        config = OmegaConf.to_object(merged)
-        self.assertIsInstance(config, ExperimentConfig)
-        self.assertEqual(config.dataset.paths, (str(self.path),))
-        self.assertEqual(config.dataset.camera_names, ())
+    def test_hydra_yaml_is_the_experiment_config(self):
+        config_dir = Path(__file__).parents[1] / "src/learning/training/conf"
+        with initialize_config_dir(config_dir=str(config_dir)):
+            config = compose(config_name="config", overrides=[
+                f"dataset.paths=[{self.path}]", "dataset.camera_names=[]",
+                "model.parameters.hidden_dim=32", "model.training.kl_weight=0.1",
+                "train.batch_size=8", "wandb.mode=disabled",
+            ])
+        self.assertEqual(config.dataset.paths, [str(self.path)])
+        self.assertEqual(config.dataset.camera_names, [])
         self.assertEqual(config.train.batch_size, 8)
-        self.assertEqual(config.model["name"], "act")
+        self.assertEqual(config.model.name, "act")
 
     def test_episode_split_normalization_and_padding(self):
         train, validation, normalizer = build_datasets(self.config())
-        self.assertEqual(ACTConfig().state_dim, 22)
         self.assertEqual((len(train.episodes), len(validation.episodes)), (1, 1))
         self.assertTrue(set(e.identity for e in train.episodes).isdisjoint(e.identity for e in validation.episodes))
         self.assertEqual(normalizer.state_mean.shape, (22,))
@@ -152,19 +151,20 @@ class ACTTrainingTests(unittest.TestCase):
         train, _, normalizer = build_datasets(self.config(camera_names=(), validation_fraction=0))
         sample = train[0]
         self.assertEqual(sample["images"], {})
-        model = ACTPolicy(ACTConfig(
-            state_dim=22, action_dim=22, chunk_size=3, camera_names=(),
-            hidden_dim=16, latent_dim=2, feedforward_dim=32, num_heads=2, num_layers=1, dropout=0,
-        ))
+        model = ACTPolicy({
+            "state_dim": 22, "action_dim": 22, "chunk_size": 3, "camera_names": [],
+            "hidden_dim": 16, "latent_dim": 2, "feedforward_dim": 32,
+            "num_heads": 2, "num_layers": 1, "dropout": 0,
+        })
         prediction = model.predict(sample["state"][None], {})
         self.assertEqual(prediction.shape, (1, 3, 22))
         self.assertEqual(normalizer.action_mean.shape, (22,))
 
     def test_forward_train_checkpoint_and_inference(self):
         config = self.config(validation_fraction=0)
-        experiment = ExperimentConfig(
-            dataset=config,
-            model={
+        experiment = {
+            "dataset": config,
+            "model": {
                 "name": "act",
                 "parameters": {
                     "hidden_dim": 32, "latent_dim": 4, "feedforward_dim": 64,
@@ -172,10 +172,16 @@ class ACTTrainingTests(unittest.TestCase):
                 },
                 "training": {"kl_weight": 0.1},
             },
-            train=TrainConfig(batch_size=2, learning_rate=1e-3, num_workers=0),
-            device="cpu",
-            output=str(Path(self.temporary.name) / "run"),
-        )
+            "train": {
+                "epochs": 1, "batch_size": 2, "learning_rate": 1e-3,
+                "weight_decay": 1e-4, "num_workers": 0, "seed": 0,
+            },
+            "wandb": {
+                "project": "test", "entity": None, "name": None, "group": None,
+                "tags": [], "mode": "disabled",
+            },
+            "device": "cpu", "output": str(Path(self.temporary.name) / "run"), "resume": None,
+        }
         trainer = ACTTrainer(experiment)
         loader = DataLoader(trainer.train_data, batch_size=2)
         metrics = trainer.run_epoch(loader, training=True)
@@ -249,7 +255,8 @@ class ACTTrainingTests(unittest.TestCase):
         self.assertTrue(run.finished)
 
         config = experiment_config(
-            ExperimentConfig(dataset=self.config(), device="cpu", output="outputs/test"), ACTConfig(),
+            {"dataset": self.config(), "device": "cpu", "output": "outputs/test"},
+            {"state_dim": 22},
         )
         self.assertEqual(config["dataset"]["paths"], [str(self.path)])
         self.assertEqual(config["model"]["state_dim"], 22)

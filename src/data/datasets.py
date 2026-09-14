@@ -12,18 +12,6 @@ from torch.utils.data import Dataset
 from .schema import TASK_STATE_NAMES, ULTRA_ACTION_JOINT_NAMES
 
 @dataclass(frozen=True)
-class DatasetConfig:
-    paths: tuple[str, ...]
-    episode_keys: tuple[str, ...] = ()
-    chunk_size: int = 25
-    state_keys: tuple[str, ...] = ("proprio",)
-    camera_names: tuple[str, ...] = ("head_rgb", "left_wrist_rgb", "right_wrist_rgb")
-    statuses: tuple[str, ...] = ("success",)
-    validation_fraction: float = 0.1
-    seed: int = 0
-
-
-@dataclass(frozen=True)
 class Episode:
     path: str
     key: str
@@ -64,14 +52,14 @@ class Normalizer:
         return cls(**value)
 
 
-def discover_episodes(config: DatasetConfig):
+def discover_episodes(config):
     episodes = []
     seen_statuses = set()
     seen_paths = set()
-    requested_keys = {key.removeprefix("data/") for key in config.episode_keys}
+    requested_keys = {key.removeprefix("data/") for key in config["episode_keys"]}
     matched_keys = {key: [] for key in requested_keys}
     expected_shapes = None
-    for filename in config.paths:
+    for filename in config["paths"]:
         path = str(Path(filename).expanduser().resolve())
         if path in seen_paths:
             raise ValueError(f"Duplicate dataset path resolves to {path}; refusing train/validation leakage")
@@ -106,33 +94,33 @@ def discover_episodes(config: DatasetConfig):
                 status = str(demo.attrs.get("status", "unknown"))
                 seen_statuses.add(status)
                 length = len(demo.get("actions", ()))
-                if status in config.statuses and length:
+                if status in config["statuses"] and length:
                     if demo["actions"].ndim != 2 or demo["actions"].shape[1] != 22:
                         raise ValueError(
                             f"{path}::{key}/actions must be [T,22] absolute Ultra targets; "
                             f"got {demo['actions'].shape}"
                         )
                     state_datasets = []
-                    for name in config.state_keys:
+                    for name in config["state_keys"]:
                         if name == "proprio":
                             state_datasets.extend(("proprio",) if "obs/proprio" in demo else ("joint_pos", "eef_pose_body"))
                         else:
                             state_datasets.append(name)
-                    required = [f"obs/{k}" for k in dict.fromkeys((*state_datasets, *config.camera_names))]
+                    required = [f"obs/{k}" for k in dict.fromkeys((*state_datasets, *config["camera_names"]))]
                     missing = [name for name in required if name not in demo]
                     if missing:
                         raise KeyError(f"{path}::{key} is missing {missing}")
                     for name in required:
                         if len(demo[name]) != length:
                             raise ValueError(f"{path}::{key}/{name} is not aligned with actions")
-                    for name in set(config.state_keys).intersection(("joint_pos", "joint_vel")):
+                    for name in set(config["state_keys"]).intersection(("joint_pos", "joint_vel")):
                         shape = demo[f"obs/{name}"].shape
                         if len(shape) != 2 or shape[1] != len(observation_names):
                             raise ValueError(
                                 f"{path}::{key}/obs/{name} must match {len(observation_names)} "
                                 f"observation_joint_names; got {shape}"
                             )
-                    if "proprio" in config.state_keys:
+                    if "proprio" in config["state_keys"]:
                         if "obs/proprio" in demo:
                             proprio_shape = demo["obs/proprio"].shape
                             if proprio_shape != (length, len(TASK_STATE_NAMES)):
@@ -153,7 +141,7 @@ def discover_episodes(config: DatasetConfig):
                                 raise ValueError(
                                     f"{path}::{key}/obs/eef_pose_body must be [T,2,7]; got {eef_shape}"
                                 )
-                    for name in config.camera_names:
+                    for name in config["camera_names"]:
                         shape = demo[f"obs/{name}"].shape
                         if len(shape) != 4 or shape[-1] != 3 or demo[f"obs/{name}"].dtype != np.uint8:
                             raise ValueError(f"{path}::{key}/obs/{name} must be uint8 [T,H,W,3]; got {shape}")
@@ -161,7 +149,7 @@ def discover_episodes(config: DatasetConfig):
                         (len(TASK_STATE_NAMES),) if name == "proprio"
                         else (len(action_names),) if name in ("joint_pos", "joint_vel")
                         else demo[f"obs/{name}"].shape[1:]
-                        for name in (*config.state_keys, *config.camera_names)
+                        for name in (*config["state_keys"], *config["camera_names"])
                     )
                     if expected_shapes is None:
                         expected_shapes = shapes
@@ -177,7 +165,7 @@ def discover_episodes(config: DatasetConfig):
         raise ValueError(f"episode_keys must identify one episode across dataset paths; ambiguous: {details}")
     if not episodes:
         raise ValueError(
-            f"No non-empty episodes match statuses={config.statuses}; found statuses={sorted(seen_statuses)}. "
+            f"No non-empty episodes match statuses={config['statuses']}; found statuses={sorted(seen_statuses)}. "
             "Override dataset.statuses to deliberately include other labels."
         )
     return episodes
@@ -282,18 +270,18 @@ class HDF5ACTDataset(Dataset):
         episode, step = self.samples[index]
         with h5py.File(episode.path, "r") as handle:
             demo = handle[episode.key]
-            state = _state(demo, self.config.state_keys, step, episode.controlled_joint_indices)
-            end = min(step + self.config.chunk_size, episode.length)
+            state = _state(demo, self.config["state_keys"], step, episode.controlled_joint_indices)
+            end = min(step + self.config["chunk_size"], episode.length)
             actions = np.asarray(demo["actions"][step:end], dtype=np.float32)
             images = {
                 name: np.asarray(demo[f"obs/{name}"][step], dtype=np.uint8)
-                for name in self.config.camera_names
+                for name in self.config["camera_names"]
             }
         valid = len(actions)
-        padded = np.empty((self.config.chunk_size, actions.shape[-1]), dtype=np.float32)
+        padded = np.empty((self.config["chunk_size"], actions.shape[-1]), dtype=np.float32)
         padded[:valid] = actions
         padded[valid:] = actions[-1]  # stable hold target, ignored by the loss
-        is_pad = np.arange(self.config.chunk_size) >= valid
+        is_pad = np.arange(self.config["chunk_size"]) >= valid
         image_tensors = {
             name: torch.from_numpy(value.copy()).permute(2, 0, 1).float().div_(255.0)
             for name, value in images.items()
@@ -306,10 +294,22 @@ class HDF5ACTDataset(Dataset):
         }
 
 
-def build_datasets(config: DatasetConfig):
+def build_datasets(config):
+    required = {
+        "paths", "episode_keys", "chunk_size", "state_keys", "camera_names",
+        "statuses", "validation_fraction", "seed",
+    }
+    missing = required.difference(config)
+    unexpected = set(config).difference(required)
+    if missing or unexpected:
+        raise ValueError(f"Invalid dataset config; missing={sorted(missing)}, unexpected={sorted(unexpected)}")
+    if config["chunk_size"] <= 0:
+        raise ValueError("dataset.chunk_size must be positive")
     episodes = discover_episodes(config)
-    train_episodes, validation_episodes = split_episodes(episodes, config.validation_fraction, config.seed)
-    normalizer = fit_normalizer(train_episodes, config.state_keys)
+    train_episodes, validation_episodes = split_episodes(
+        episodes, config["validation_fraction"], config["seed"],
+    )
+    normalizer = fit_normalizer(train_episodes, config["state_keys"])
     return (
         HDF5ACTDataset(train_episodes, config, normalizer),
         HDF5ACTDataset(validation_episodes, config, normalizer),
@@ -323,15 +323,10 @@ def dataset_manifest(config, train, validation):
         stat = Path(path).stat()
         fingerprints[path] = {"size": stat.st_size, "mtime_ns": stat.st_mtime_ns}
     return {
-        "config": {
-            **config.__dict__,
-            "paths": list(config.paths), "episode_keys": list(config.episode_keys),
-            "state_keys": list(config.state_keys),
-            "camera_names": list(config.camera_names), "statuses": list(config.statuses),
-        },
+        "config": {key: list(value) if isinstance(value, tuple) else value for key, value in config.items()},
         "train_episodes": [episode.identity for episode in train.episodes],
         "validation_episodes": [episode.identity for episode in validation.episodes],
         "controlled_joint_names": list(ULTRA_ACTION_JOINT_NAMES),
-        "state_layout": list(TASK_STATE_NAMES) if config.state_keys == ("proprio",) else None,
+        "state_layout": list(TASK_STATE_NAMES) if tuple(config["state_keys"]) == ("proprio",) else None,
         "file_fingerprints": fingerprints,
     }

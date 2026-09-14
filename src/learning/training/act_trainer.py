@@ -1,6 +1,6 @@
 """ACT-specific trainer implementation selected by Hydra."""
 
-from learning.models import ACTConfig, ACTPolicy
+from learning.models import ACTPolicy
 
 from .engine import PolicyTrainer
 
@@ -11,7 +11,7 @@ class ACTTrainer(PolicyTrainer):
     def create_model(self, model_name, parameters, **contract):
         if model_name != "act":
             raise ValueError(f"ACTTrainer requires model.name=act, got {model_name!r}")
-        config = ACTConfig(**contract, **parameters)
+        config = {**contract, **parameters}
         return ACTPolicy(config), config
 
     def training_forward(self, model, state, images, actions, is_pad, training):

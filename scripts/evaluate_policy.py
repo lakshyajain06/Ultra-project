@@ -249,10 +249,10 @@ def main():
     unknown_cameras = set(policy.camera_names).difference(CAMERA_STREAMS)
     if unknown_cameras:
         raise ValueError(f"Checkpoint requests unsupported cameras: {sorted(unknown_cameras)}")
-    if args.chunk_steps > policy.model.config.chunk_size:
+    if args.chunk_steps > policy.model.config["chunk_size"]:
         raise ValueError(
             f"--chunk-steps={args.chunk_steps} exceeds checkpoint chunk size "
-            f"{policy.model.config.chunk_size}"
+            f"{policy.model.config['chunk_size']}"
         )
 
     recording_cameras = CAMERA_STREAMS if args.record_dir else policy.camera_names

@@ -49,10 +49,10 @@ class PolicyInference:
             batched = state.ndim == 2
             if state.ndim == 1:
                 state = state[None]
-            if state.ndim != 2 or state.shape[1] != self.model.config.state_dim:
+            if state.ndim != 2 or state.shape[1] != self.model.config["state_dim"]:
                 raise ValueError(
-                    f"proprio must have shape [{self.model.config.state_dim}] or "
-                    f"[B,{self.model.config.state_dim}], got {state.shape}"
+                    f"proprio must have shape [{self.model.config['state_dim']}] or "
+                    f"[B,{self.model.config['state_dim']}], got {state.shape}"
                 )
         elif self.state_keys == ("proprio",):
             joint_pos = _as_numpy(observation["joint_pos"], np.float32)
