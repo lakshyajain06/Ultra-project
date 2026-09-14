@@ -498,6 +498,11 @@ The layout is third-person/head on the top row and left/right wrist on the
 bottom row. Existing episode files are never overwritten. Pass `--no-record`
 for metrics-only evaluation without cameras or videos.
 
+Isaac Sim's detailed startup and shutdown output is written to `isaac.log` in
+the same timestamped evaluation directory. The console shows only checkpoint,
+startup, environment, recording, and episode progress plus result JSON. Pass
+`--verbose` or `--info` to show Isaac's logs directly while debugging startup.
+
 The evaluator selects the state or vision environment from the cameras stored
 in the checkpoint, uses the manager's success/drop/timeout terms, and prints
 one JSON record per episode followed by an aggregate `EVALUATION` record. It

@@ -2,9 +2,12 @@
 """Evaluate a policy checkpoint in the manager-based Ultra environment."""
 
 import argparse
+from contextlib import contextmanager
 from datetime import datetime
 import json
+import os
 from pathlib import Path
+import sys
 
 from isaaclab.app import AppLauncher
 
@@ -55,14 +58,50 @@ if args.video_fps <= 0:
     parser.error("--video-fps must be positive")
 if args.no_record and args.record_dir is not None:
     parser.error("--no-record cannot be combined with --record-dir")
-if args.record_dir is None and not args.no_record:
+if args.record_dir is None:
     timestamp = datetime.now().astimezone().strftime("%Y%m%d_%H%M%S_%z")
-    args.record_dir = Path("outputs/evaluation") / timestamp
+    run_dir = Path("outputs/evaluation") / timestamp
+    suffix = 1
+    while run_dir.exists():
+        run_dir = Path("outputs/evaluation") / f"{timestamp}_{suffix:02d}"
+        suffix += 1
+else:
+    run_dir = args.record_dir
 if args.record_dir is not None:
     existing = [args.record_dir / f"episode_{index:04d}.mp4" for index in range(args.episodes)]
+    existing.append(args.record_dir / "isaac.log")
     existing = [path for path in existing if path.exists()]
     if existing:
-        parser.error(f"Refusing to overwrite existing evaluation video: {existing[0]}")
+        parser.error(f"Refusing to overwrite existing evaluation output: {existing[0]}")
+if not args.no_record:
+    args.record_dir = run_dir
+run_dir.mkdir(parents=True, exist_ok=True)
+isaac_log = run_dir / "isaac.log"
+
+
+@contextmanager
+def capture_isaac_output():
+    """Redirect process-level stdout/stderr so native Kit logs are captured too."""
+    if args.verbose or args.info:
+        yield
+        return
+    sys.stdout.flush()
+    sys.stderr.flush()
+    log_fd = os.open(isaac_log, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+    stdout_fd = os.dup(sys.stdout.fileno())
+    stderr_fd = os.dup(sys.stderr.fileno())
+    try:
+        os.dup2(log_fd, sys.stdout.fileno())
+        os.dup2(log_fd, sys.stderr.fileno())
+        yield
+    finally:
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os.dup2(stdout_fd, sys.stdout.fileno())
+        os.dup2(stderr_fd, sys.stderr.fileno())
+        os.close(stdout_fd)
+        os.close(stderr_fd)
+        os.close(log_fd)
 
 # Inspect the checkpoint on CPU before launching Kit because the selected
 # manager environment determines whether RTX camera extensions are required.
@@ -70,19 +109,28 @@ import torch
 
 from learning.inference import PolicyInference
 
+print(f"Loading checkpoint: {args.checkpoint}", flush=True)
 policy = PolicyInference.from_checkpoint(args.checkpoint, device="cpu")
 args.enable_cameras = bool(policy.camera_names or args.record_dir)
-launcher = AppLauncher(args)
+if args.verbose or args.info:
+    print("Isaac logs: console", flush=True)
+else:
+    print(f"Isaac log: {isaac_log.resolve()}", flush=True)
+print("Starting Isaac Sim...", flush=True)
+with capture_isaac_output():
+    launcher = AppLauncher(args)
 app = launcher.app
+print("Isaac Sim started.", flush=True)
 
-import numpy as np
-import imageio.v2 as imageio
-import isaaclab.sim as sim_utils
-from isaaclab.envs import ManagerBasedRLEnv
-from isaaclab.sensors import CameraCfg
+with capture_isaac_output():
+    import numpy as np
+    import imageio.v2 as imageio
+    import isaaclab.sim as sim_utils
+    from isaaclab.envs import ManagerBasedRLEnv
+    from isaaclab.sensors import CameraCfg
 
-from sim import ULTRA_CONTROLLED_JOINT_NAMES
-from sim.envs import CAMERA_STREAMS, UltraCubePlateEnvCfg, UltraCubePlateVisionEnvCfg
+    from sim import ULTRA_CONTROLLED_JOINT_NAMES
+    from sim.envs import CAMERA_STREAMS, UltraCubePlateEnvCfg, UltraCubePlateVisionEnvCfg
 
 
 THIRD_PERSON_EYE = (3.5, 5.0, 2.4)
@@ -239,17 +287,25 @@ def main():
     if args.max_steps is not None:
         cfg.episode_length_s = args.max_steps * cfg.decimation * cfg.sim.dt
 
-    env = ManagerBasedRLEnv(cfg=cfg)
+    env = None
     results = []
     recorder = EpisodeVideoRecorder(args.record_dir, args.video_fps) if args.record_dir else None
     try:
-        if recorder:
-            origins = _tensor(env.scene.env_origins).detach().cpu().numpy()
-            env.scene["camera"].set_world_poses_from_view(
-                origins + np.asarray(THIRD_PERSON_EYE, dtype=np.float32),
-                origins + np.asarray(THIRD_PERSON_TARGET, dtype=np.float32),
-            )
-        observations, _ = env.reset(seed=args.seed)
+        camera_count = args.num_envs * (4 if recorder else len(policy.camera_names))
+        print(
+            f"Creating {args.num_envs} manager environment(s) with {camera_count} camera stream(s)...",
+            flush=True,
+        )
+        with capture_isaac_output():
+            env = ManagerBasedRLEnv(cfg=cfg)
+            if recorder:
+                origins = _tensor(env.scene.env_origins).detach().cpu().numpy()
+                env.scene["camera"].set_world_poses_from_view(
+                    origins + np.asarray(THIRD_PERSON_EYE, dtype=np.float32),
+                    origins + np.asarray(THIRD_PERSON_TARGET, dtype=np.float32),
+                )
+            observations, _ = env.reset(seed=args.seed)
+        print("Environment ready. Running evaluation...", flush=True)
         robot = env.scene["robot"]
         joint_ids, joint_names = robot.find_joints(ULTRA_CONTROLLED_JOINT_NAMES, preserve_order=True)
         if tuple(joint_names) != ULTRA_CONTROLLED_JOINT_NAMES:
@@ -339,7 +395,9 @@ def main():
     finally:
         if recorder:
             recorder.close()
-        env.close()
+        if env is not None:
+            with capture_isaac_output():
+                env.close()
 
 
 if __name__ == "__main__":
@@ -351,4 +409,5 @@ if __name__ == "__main__":
         traceback.print_exc()
         raise
     finally:
-        app.close()
+        with capture_isaac_output():
+            app.close()
