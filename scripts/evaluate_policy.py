@@ -33,7 +33,7 @@ parser.add_argument("--camera-height", type=int, default=240)
 parser.add_argument(
     "--record-dir",
     type=Path,
-    help="Override the timestamped evaluation recording directory",
+    help="Override the timestamped WebM recording directory",
 )
 parser.add_argument("--no-record", action="store_true", help="Disable evaluation video recording")
 parser.add_argument("--video-fps", type=int, default=25, help="Frame rate for evaluation videos")
@@ -59,7 +59,7 @@ if args.record_dir is None and not args.no_record:
     timestamp = datetime.now().astimezone().strftime("%Y%m%d_%H%M%S_%z")
     args.record_dir = Path("outputs/evaluation") / timestamp
 if args.record_dir is not None:
-    existing = [args.record_dir / f"episode_{index:04d}.mp4" for index in range(args.episodes)]
+    existing = [args.record_dir / f"episode_{index:04d}.webm" for index in range(args.episodes)]
     existing = [path for path in existing if path.exists()]
     if existing:
         parser.error(f"Refusing to overwrite existing evaluation video: {existing[0]}")
@@ -158,7 +158,7 @@ def _video_frame(observations, env, env_index):
 
 
 class EpisodeVideoRecorder:
-    """Write synchronized camera mosaics without retaining episodes in memory."""
+    """Write VS Code-compatible camera mosaics without retaining episodes in memory."""
 
     def __init__(self, directory, fps):
         self.directory = directory
@@ -168,9 +168,21 @@ class EpisodeVideoRecorder:
 
     def start(self, env_index, episode, observations, env):
         self.directory.mkdir(parents=True, exist_ok=True)
-        path = self.directory / f"episode_{episode:04d}.mp4"
+        path = self.directory / f"episode_{episode:04d}.webm"
         self.paths[env_index] = path
-        self.writers[env_index] = imageio.get_writer(path, fps=self.fps, codec="libx264")
+        self.writers[env_index] = imageio.get_writer(
+            path,
+            fps=self.fps,
+            codec="libvpx-vp9",
+            pixelformat="yuv420p",
+            output_params=[
+                "-crf", "30",
+                "-b:v", "0",
+                "-deadline", "realtime",
+                "-cpu-used", "6",
+                "-row-mt", "1",
+            ],
+        )
         self.append(env_index, observations, env)
 
     def append(self, env_index, observations, env):
