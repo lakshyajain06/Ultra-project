@@ -29,12 +29,23 @@ parser.add_argument(
     help="XYZ offset in metres from Ultra's head camera",
 )
 parser.add_argument("--anchor_yaw", type=float, default=0.0, help="Yaw offset from Ultra's head camera, in degrees")
+parser.add_argument(
+    "--headset_height", type=float, default=1.65,
+    help="Tracked headset height above the Quest floor origin, in metres",
+)
+parser.add_argument("--randomize_cube_position", action="store_true", help="Randomize the cube XY position on reset")
+parser.add_argument(
+    "--cube_position_range", nargs=2, type=float, default=(0.08, 0.08), metavar=("X", "Y"),
+    help="Maximum absolute XY offset from the default cube position, in metres",
+)
 AppLauncher.add_app_launcher_args(parser)
 args = parser.parse_args()
 if min(args.scale, args.episode_seconds) <= 0 or args.steps < 0:
     parser.error("scale and episode_seconds must be positive; steps must be nonnegative")
 if min(args.camera_width, args.camera_height) <= 0:
     parser.error("camera dimensions must be positive")
+if args.headset_height < 0 or min(args.cube_position_range) < 0:
+    parser.error("headset_height and cube_position_range must be nonnegative")
 if args.dataset and args.dataset.exists():
     parser.error(f"Dataset already exists: {args.dataset}; choose a new path")
 if not args.smoke:
@@ -71,6 +82,8 @@ def main():
     env = UltraTeleopEnv(
         args.device, enable_cameras=args.enable_cameras,
         camera_width=args.camera_width, camera_height=args.camera_height,
+        randomize_cube_position=args.randomize_cube_position,
+        cube_position_range=tuple(args.cube_position_range),
     )
     obs, _ = env.reset(seed=args.seed)
     mapper = ClutchMapper(scale=args.scale, rotation_offset_deg=args.tool_rotation_offset)
@@ -107,6 +120,9 @@ def main():
         ],
         "orientation_calibration": "per-controller fixed transform; initial tracking or right-stick recalibration",
         "anchor_pos": args.anchor_pos, "anchor_yaw_deg": args.anchor_yaw, "synthetic": args.smoke,
+        "headset_height": args.headset_height,
+        "randomize_cube_position": args.randomize_cube_position,
+        "cube_position_range_xy": args.cube_position_range,
         "success_label": "operator supplied; synthetic smoke episodes are never successes",
     }
     if not args.smoke:
@@ -136,7 +152,7 @@ def main():
             cfg = IsaacTeleopCfg(
                 pipeline_builder=build_pipeline, sim_device=args.device,
                 xr_cfg=XrCfg(
-                    anchor_pos=tuple(args.anchor_pos),
+                    anchor_pos=(args.anchor_pos[0], args.anchor_pos[1], args.anchor_pos[2] - args.headset_height),
                     anchor_prim_path=HEAD_CAMERA_PRIM_PATH,
                     anchor_rotation_mode=XrAnchorRotationMode.CUSTOM,
                     anchor_rotation_custom_func=head_camera_anchor_rotation(args.anchor_yaw),
@@ -194,7 +210,7 @@ def main():
                 if recorder:
                     recorder.finish(status)
                 print(f"Episode: {status}", flush=True)
-                obs, _ = env.reset(seed=args.seed)
+                obs, _ = env.reset()
                 mapper.reset()
                 body_mapper.reset()
                 recording = False

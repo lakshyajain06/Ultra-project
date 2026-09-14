@@ -160,7 +160,14 @@ entire bimanual assembly moves with it. The Quest view is dynamically anchored
 to Ultra's `zed_left` head camera, following its position and full orientation.
 Use `--anchor_pos X Y Z` for a world-axis offset from that camera (default
 `0 0 0`) and `--anchor_yaw DEGREES` for a local yaw offset. The dynamic anchor
-remains attached as Ultra's head moves.
+remains attached as Ultra's head moves. OpenXR reports the headset relative to
+its floor origin, so `--headset_height` compensates that height when aligning
+the user's eyes to the robot camera (default 1.65 m).
+
+Pass `--randomize_cube_position` to sample a new cube position on every reset.
+The default `--cube_position_range 0.08 0.08` applies independent ±8 cm X/Y
+offsets around the authored start position; sampling is deterministic from
+`--seed`, and the setting is stored in dataset metadata.
 
 Control runs at 25 Hz over the existing 50 Hz physics. Damped least-squares IK
 uses one solve per palm and a separate solve for the shared body support.

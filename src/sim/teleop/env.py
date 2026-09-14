@@ -31,7 +31,15 @@ class UltraTeleopEnv(gym.Env):
     metadata = {"render_modes": []}
     control_dt = 0.04
 
-    def __init__(self, device="cuda:0", enable_cameras=False, camera_width=320, camera_height=240):
+    def __init__(
+        self,
+        device="cuda:0",
+        enable_cameras=False,
+        camera_width=320,
+        camera_height=240,
+        randomize_cube_position=False,
+        cube_position_range=(0.08, 0.08),
+    ):
         self.sim = SimulationContext(sim_utils.SimulationCfg(dt=0.02, render_interval=1, device=device))
         self.sim.set_camera_view(eye=(3.5, 5.0, 2.4), target=(0.0, 0.65, 0.80))
         cfg = UltraTabletopSceneCfg(num_envs=1, env_spacing=3.0)
@@ -87,6 +95,10 @@ class UltraTeleopEnv(gym.Env):
                 0, 255, (camera_height, camera_width, 3), np.uint8,
             )
         self.elapsed = 0.0
+        self.randomize_cube_position = bool(randomize_cube_position)
+        self.cube_position_range = np.asarray(cube_position_range, dtype=np.float32)
+        if self.cube_position_range.shape != (2,) or np.any(self.cube_position_range < 0):
+            raise ValueError("cube_position_range must contain two nonnegative XY extents")
 
     def observe(self):
         body_pose = numpy(self.robot.data.body_link_pose_w)[0, self.body_id]
@@ -139,6 +151,9 @@ class UltraTeleopEnv(gym.Env):
             obj = self.scene[name]
             pose = as_torch(obj.data.default_root_pose).clone()
             pose[:, :3] += as_torch(self.scene.env_origins)
+            if name == "cube" and self.randomize_cube_position:
+                offset = self.np_random.uniform(-self.cube_position_range, self.cube_position_range)
+                pose[:, :2] += torch.as_tensor(offset, device=pose.device, dtype=pose.dtype)
             obj.write_root_pose_to_sim_index(root_pose=pose)
             obj.write_root_velocity_to_sim_index(root_velocity=as_torch(obj.data.default_root_vel).clone())
         self.scene.reset()
