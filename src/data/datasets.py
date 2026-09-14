@@ -14,6 +14,7 @@ from .schema import TASK_STATE_NAMES, ULTRA_ACTION_JOINT_NAMES
 @dataclass(frozen=True)
 class DatasetConfig:
     paths: tuple[str, ...]
+    episode_keys: tuple[str, ...] = ()
     chunk_size: int = 25
     state_keys: tuple[str, ...] = ("proprio",)
     camera_names: tuple[str, ...] = ("head_rgb", "left_wrist_rgb", "right_wrist_rgb")
@@ -67,6 +68,8 @@ def discover_episodes(config: DatasetConfig):
     episodes = []
     seen_statuses = set()
     seen_paths = set()
+    requested_keys = {key.removeprefix("data/") for key in config.episode_keys}
+    matched_keys = {key: [] for key in requested_keys}
     expected_shapes = None
     for filename in config.paths:
         path = str(Path(filename).expanduser().resolve())
@@ -96,6 +99,10 @@ def discover_episodes(config: DatasetConfig):
             if "data" not in handle:
                 raise ValueError(f"{path} has no /data group")
             for key, demo in handle["data"].items():
+                if key in matched_keys:
+                    matched_keys[key].append(path)
+                if requested_keys and key not in requested_keys:
+                    continue
                 status = str(demo.attrs.get("status", "unknown"))
                 seen_statuses.add(status)
                 length = len(demo.get("actions", ()))
@@ -161,10 +168,17 @@ def discover_episodes(config: DatasetConfig):
                     elif shapes != expected_shapes:
                         raise ValueError(f"{path}::{key} observation shapes differ from other selected episodes")
                     episodes.append(Episode(path, f"data/{key}", length, status, controlled_indices))
+    missing_keys = sorted(key for key, paths in matched_keys.items() if not paths)
+    if missing_keys:
+        raise ValueError(f"Requested episode_keys were not found: {missing_keys}")
+    ambiguous_keys = {key: paths for key, paths in matched_keys.items() if len(paths) > 1}
+    if ambiguous_keys:
+        details = ", ".join(f"{key} in {paths}" for key, paths in sorted(ambiguous_keys.items()))
+        raise ValueError(f"episode_keys must identify one episode across dataset paths; ambiguous: {details}")
     if not episodes:
         raise ValueError(
             f"No non-empty episodes match statuses={config.statuses}; found statuses={sorted(seen_statuses)}. "
-            "Use --statuses to deliberately include other labels."
+            "Override dataset.statuses to deliberately include other labels."
         )
     return episodes
 
@@ -311,7 +325,8 @@ def dataset_manifest(config, train, validation):
     return {
         "config": {
             **config.__dict__,
-            "paths": list(config.paths), "state_keys": list(config.state_keys),
+            "paths": list(config.paths), "episode_keys": list(config.episode_keys),
+            "state_keys": list(config.state_keys),
             "camera_names": list(config.camera_names), "statuses": list(config.statuses),
         },
         "train_episodes": [episode.identity for episode in train.episodes],

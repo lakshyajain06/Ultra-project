@@ -1,7 +1,6 @@
 """Launch the simple Ultra tabletop scene in Isaac Lab."""
 
 import argparse
-import sys
 from pathlib import Path
 
 from isaaclab.app import AppLauncher
@@ -35,8 +34,6 @@ import isaaclab.sim as sim_utils
 from isaaclab.scene import InteractiveScene
 from isaaclab.sim import SimulationContext
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO_ROOT / "source"))
 from sim import UltraJointPositionController, UltraTabletopSceneCfg  # noqa: E402
 from sim.robots.ultra import as_torch  # noqa: E402
 

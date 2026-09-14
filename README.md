@@ -11,7 +11,8 @@ assets/robots/ultra/ Source-contract metadata (generated USD stays local)
 src/sim/             Isaac Lab scenes, environments, robots, and teleoperation
 src/data/            Shared demonstration schema, recording, and datasets
 src/learning/        Simulator-independent models, inference, and training
-scripts/             Runnable workflow entry points
+scripts/             Data collection, training, and evaluation entry points
+scripts/debug/       Scene and manager-environment smoke-test runners
 tests/               Offline simulation, data, and learning tests
 tools/               Asset conversion utilities
 third_party/         Third-party source checkouts
@@ -37,20 +38,20 @@ The first sync can take time because Isaac Sim is large. Open the interactive
 viewer through the locked environment:
 
 ```bash
-uv run python scripts/run_isaaclab_scene.py --viz kit
+uv run python scripts/debug/run_isaaclab_scene.py --viz kit
 ```
 
 For a finite headless check:
 
 ```bash
-uv run python scripts/run_isaaclab_scene.py --viz none --steps 250
+uv run python scripts/debug/run_isaaclab_scene.py --viz none --steps 250
 ```
 
 To render over SSH without opening a desktop window, save a screenshot or MP4:
 
 ```bash
-uv run python scripts/run_isaaclab_scene.py --viz none --screenshot outputs/ultra_scene.png
-uv run python scripts/run_isaaclab_scene.py --viz none --video outputs/ultra_scene.mp4 --steps 150
+uv run python scripts/debug/run_isaaclab_scene.py --viz none --screenshot outputs/ultra_scene.png
+uv run python scripts/debug/run_isaaclab_scene.py --viz none --video outputs/ultra_scene.mp4 --steps 150
 ```
 
 The runner enables Isaac Lab's offscreen camera renderer automatically when
@@ -62,7 +63,7 @@ FPS to match the scene's render interval.
 Clone the scene for vectorized development with `--num_envs`, for example:
 
 ```bash
-uv run python scripts/run_isaaclab_scene.py --viz none --num_envs 16 --steps 250
+uv run python scripts/debug/run_isaaclab_scene.py --viz none --num_envs 16 --steps 250
 ```
 
 The runner uses Isaac Lab's PhysX backend and its default scene configuration.
@@ -322,10 +323,10 @@ falls below the table or after 120 simulated seconds.
 Run a short headless smoke test:
 
 ```bash
-uv run --locked python scripts/run_ultra_rl_env.py --viz none --num_envs 4 --steps 10
+uv run --locked python scripts/debug/run_ultra_rl_env.py --viz none --num_envs 4 --steps 10
 
 # Also exercise the stable-placement termination with a known-good placement.
-uv run --locked python scripts/run_ultra_rl_env.py --viz none --steps 10 --check-success
+uv run --locked python scripts/debug/run_ultra_rl_env.py --viz none --steps 10 --check-success
 ```
 
 Use `--vision` to select `UltraCubePlateVisionEnvCfg`, which adds float32 HWC
@@ -335,7 +336,7 @@ data. Each attached robot camera is independently optional:
 
 ```bash
 # Head and right wrist only, at a smaller resolution.
-uv run --locked python scripts/run_ultra_rl_env.py --viz none --vision \
+uv run --locked python scripts/debug/run_ultra_rl_env.py --viz none --vision \
   --cameras head_rgb right_wrist_rgb --camera-width 160 --camera-height 120
 ```
 
@@ -344,10 +345,14 @@ In Python, pass `enabled_cameras=("head_rgb",)` to
 height)` before constructing the environment. An empty stream tuple disables
 all cameras. The vision configuration defaults to one environment because RTX
 cameras are substantially more expensive than state observations.
-## ACT behavior-cloning training
+## Policy behavior-cloning training
 
-The learning package contains a compact Action Chunking with Transformers
-(ACT) policy and an HDF5 training pipeline. It runs outside Isaac Sim and uses
+The default `model=act trainer=act` configuration selects a compact Action
+Chunking with Transformers policy and its `ACTTrainer`. Hydra chooses the
+trainer class; the generic entry point only composes the experiment and runs
+that class. The model-family registry is used separately to reconstruct models
+from checkpoints during inference. The
+HDF5 training pipeline runs outside Isaac Sim and uses
 only dependencies already present in the project. By default, each sample uses
 the 22D task-centric `proprio` vector, the head/left-wrist/right-wrist RGB frames,
 and predicts the next 25 absolute 22-joint targets. The state order is six torso
@@ -366,9 +371,9 @@ Hydra's `section.key=value` override syntax.
 Train on one or more collections:
 
 ```bash
-uv run python scripts/train_act.py \
+uv run python scripts/train_policy.py \
   'dataset.paths=[datasets/ultra_001.hdf5,datasets/ultra_002.hdf5]' \
-  output=outputs/act/place_cube train.epochs=100 train.batch_size=16
+  output=outputs/policy/place_cube train.epochs=100 train.batch_size=16
 ```
 
 Only `success` episodes are selected by default. Status selection is explicit;
@@ -382,14 +387,32 @@ legacy 44D controlled q/qdot state remains available with
 including all of them (`dataset.camera_names=[]`), without changing the dataset
 format. Run with `--help` to inspect the complete typed configuration tree.
 Configuration files live under `src/learning/training/conf`; Hydra groups make
-presets composable, for example `train=debug wandb=offline`. The dataclass
-schema still validates the fully composed configuration before training starts.
+presets composable, for example
+`model=act trainer=act train=debug wandb=offline`. Model
+parameters are overridden below the selected model, such as
+`model.parameters.hidden_dim=128`; ACT's KL weight is similarly configured as
+`model.training.kl_weight`. The experiment schema and selected model registry
+validate the fully composed configuration before training starts.
+Adding another policy family requires its model and trainer implementations,
+matching Hydra files under `training/conf/model` and `training/conf/trainer`,
+and a checkpoint-loading entry in `learning.models.registry`; the generic
+training and evaluation entry points do not change.
+Select exact demonstrations with `dataset.episode_keys`. Short keys are accepted
+with or without the `data/` prefix and must resolve uniquely across all selected
+files:
+
+```bash
+uv run python scripts/train_policy.py \
+  'dataset.paths=[datasets/ultra_001.hdf5]' \
+  'dataset.episode_keys=[demo_000003]' \
+  dataset.validation_fraction=0
+```
 
 Resume an interrupted run with the same architecture and data arguments:
 
 ```bash
-uv run python scripts/train_act.py 'dataset.paths=[datasets/ultra_001.hdf5]' \
-  output=outputs/act/place_cube resume=outputs/act/place_cube/latest.pt
+uv run python scripts/train_policy.py 'dataset.paths=[datasets/ultra_001.hdf5]' \
+  output=outputs/policy/place_cube resume=outputs/policy/place_cube/latest.pt
 ```
 
 `latest.pt` and `best.pt` are written at epoch boundaries and contain model and optimizer state, model/training
@@ -401,16 +424,19 @@ separate joint-target MAE in radians and jaw-target MAE in metres, KL loss, and
 total loss. The best checkpoint is selected using validation MAE in action units
 (or training MAE when no validation episodes are requested).
 
-Training is tracked with Weights & Biases by default under the `ultra-act`
+Training is tracked with Weights & Biases by default under the `ultra-policy`
 project:
 
 ```bash
-uv run python scripts/train_act.py \
+uv run python scripts/train_policy.py \
   'dataset.paths=[datasets/ultra_001.hdf5]' wandb.name=place-cube-baseline
 ```
 
 The run records the complete train/dataset/model configuration and namespaced
-train and validation metrics at each optimizer step. `wandb.entity`,
+train and validation metrics at each epoch. Logged diagnostics include
+reconstruction and weighted-KL losses, physical and normalized errors,
+pre-clipping gradient norm, learning rate, throughput, epoch timing, dataset
+sizes, and model parameter counts. `wandb.entity`,
 `wandb.group`, `wandb.tags`, and `wandb.mode=offline` are also supported.
 When `resume=` is used with the same output directory, tracking resumes the
 saved W&B run ID. Use `wandb.mode=disabled` for an intentionally untracked
@@ -420,9 +446,9 @@ For manager-environment integration, pass the same observation dictionary to
 the simulator-independent inference wrapper:
 
 ```python
-from learning.inference import ACTInference
+from learning.inference import PolicyInference
 
-policy = ACTInference.from_checkpoint("outputs/act/place_cube/best.pt", device="cuda")
+policy = PolicyInference.from_checkpoint("outputs/policy/place_cube/best.pt", device="cuda")
 action_chunk = policy.predict(observation)  # accepts manager [1,22] proprio and [1,H,W,3] RGB
 action = action_chunk[0]
 ```
@@ -443,6 +469,31 @@ The wrapper currently stages device-backed observations through CPU NumPy
 before normalized inference. This is a simple, reliable integration path, but
 high-throughput vectorized deployment should use an on-device batched adapter
 to avoid GPU-to-CPU-to-GPU camera copies.
+
+Evaluate a checkpoint for complete episodes in the manager-based environment:
+
+```bash
+uv run --locked python scripts/evaluate_policy.py outputs/policy/place_cube/best.pt \
+  --viz none --episodes 10
+```
+
+Record each episode as a synchronized 2x2 MP4 containing third-person, head,
+left-wrist, and right-wrist views:
+
+```bash
+uv run --locked python scripts/evaluate_policy.py outputs/policy/place_cube/best.pt \
+  --viz none --episodes 10 --record-dir outputs/policy/place_cube/evaluation
+```
+
+The layout is third-person/head on the top row and left/right wrist on the
+bottom row. Existing episode files are never overwritten.
+
+The evaluator selects the state or vision environment from the cameras stored
+in the checkpoint, uses the manager's success/drop/timeout terms, and prints
+one JSON record per episode followed by an aggregate `EVALUATION` record. It
+executes the first action of each predicted chunk by default. Set
+`--chunk-steps N` to execute up to `N` actions open-loop, and use `--max-steps`
+to impose a shorter episode limit for quick checks.
 
 Run the CPU-only synthetic-data tests with:
 

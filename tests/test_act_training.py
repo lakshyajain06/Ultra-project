@@ -12,10 +12,10 @@ from omegaconf import OmegaConf
 from torch.utils.data import DataLoader
 
 from data.datasets import DatasetConfig, build_datasets, compose_task_state
-from learning.inference import ACTInference
+from learning.inference import PolicyInference
 from learning.models import ACTConfig, ACTPolicy
-from learning.training.config import ACTArchitectureConfig, ExperimentConfig, TrainConfig
-from learning.training.engine import Trainer
+from learning.training.config import ExperimentConfig, TrainConfig
+from learning.training.act_trainer import ACTTrainer
 from learning.training.tracking import WandbTracker, experiment_config
 
 
@@ -68,6 +68,7 @@ class ACTTrainingTests(unittest.TestCase):
         structured = OmegaConf.structured(ExperimentConfig)
         merged = OmegaConf.merge(structured, {
             "dataset": {"paths": [str(self.path)], "camera_names": []},
+            "model": {"name": "act", "parameters": {"hidden_dim": 32}, "training": {"kl_weight": 0.1}},
             "train": {"batch_size": 8},
             "wandb": {"mode": "disabled"},
         })
@@ -76,6 +77,7 @@ class ACTTrainingTests(unittest.TestCase):
         self.assertEqual(config.dataset.paths, (str(self.path),))
         self.assertEqual(config.dataset.camera_names, ())
         self.assertEqual(config.train.batch_size, 8)
+        self.assertEqual(config.model["name"], "act")
 
     def test_episode_split_normalization_and_padding(self):
         train, validation, normalizer = build_datasets(self.config())
@@ -106,6 +108,24 @@ class ACTTrainingTests(unittest.TestCase):
     def test_status_error_explains_available_labels(self):
         with self.assertRaisesRegex(ValueError, "found statuses=.*aborted.*success"):
             build_datasets(self.config(statuses=("timeout",)))
+
+    def test_episode_key_selects_exactly_one_episode(self):
+        train, validation, _ = build_datasets(self.config(
+            episode_keys=("data/demo_000001",), validation_fraction=0,
+        ))
+        self.assertEqual([episode.key for episode in train.episodes], ["data/demo_000001"])
+        self.assertEqual(validation.episodes, [])
+
+        with self.assertRaisesRegex(ValueError, "were not found.*demo_999999"):
+            build_datasets(self.config(episode_keys=("demo_999999",)))
+
+    def test_episode_key_must_be_unique_across_files(self):
+        second = Path(self.temporary.name) / "synthetic-copy.hdf5"
+        make_dataset(second)
+        with self.assertRaisesRegex(ValueError, "ambiguous.*demo_000000"):
+            build_datasets(self.config(
+                paths=(str(self.path), str(second)), episode_keys=("demo_000000",),
+            ))
 
     def test_duplicate_path_is_rejected(self):
         duplicate = self.config(paths=(str(self.path), str(self.path.resolve())))
@@ -144,25 +164,35 @@ class ACTTrainingTests(unittest.TestCase):
         config = self.config(validation_fraction=0)
         experiment = ExperimentConfig(
             dataset=config,
-            model=ACTArchitectureConfig(
-                hidden_dim=32, latent_dim=4, feedforward_dim=64, num_heads=4, num_layers=1, dropout=0,
-            ),
-            train=TrainConfig(batch_size=2, learning_rate=1e-3, kl_weight=0.1, num_workers=0),
+            model={
+                "name": "act",
+                "parameters": {
+                    "hidden_dim": 32, "latent_dim": 4, "feedforward_dim": 64,
+                    "num_heads": 4, "num_layers": 1, "dropout": 0,
+                },
+                "training": {"kl_weight": 0.1},
+            },
+            train=TrainConfig(batch_size=2, learning_rate=1e-3, num_workers=0),
             device="cpu",
             output=str(Path(self.temporary.name) / "run"),
         )
-        trainer = Trainer(experiment)
+        trainer = ACTTrainer(experiment)
         loader = DataLoader(trainer.train_data, batch_size=2)
         metrics = trainer.run_epoch(loader, training=True)
         self.assertTrue(all(np.isfinite(value) for value in metrics.values()))
+        self.assertIn("gradient_norm", metrics)
+        self.assertAlmostEqual(
+            metrics["loss"], metrics["reconstruction_loss"] + metrics["weighted_kl"], places=5,
+        )
         checkpoint = Path(self.temporary.name) / "checkpoint.pt"
         trainer.step = len(loader)
         trainer.best = 1.0
         trainer.save_checkpoint(checkpoint, epoch=0)
-        clone = Trainer(experiment)
+        clone = ACTTrainer(experiment)
         payload = clone.restore(checkpoint, restore_rng=False)
+        self.assertEqual(payload["model_name"], "act")
         self.assertEqual(payload["model_config"]["action_dim"], 22)
-        runner = ACTInference.from_checkpoint(checkpoint)
+        runner = PolicyInference.from_checkpoint(checkpoint)
         with h5py.File(self.path) as handle:
             demo = handle["data/demo_000000/obs"]
             observation = {"joint_pos": demo["joint_pos"][0], "eef_pose_body": demo["eef_pose_body"][0]}
@@ -202,6 +232,7 @@ class ACTTrainingTests(unittest.TestCase):
 
         run = FakeRun()
         tracker = WandbTracker(run)
+        tracker.set_summary({"model/parameters": 123})
         tracker.log_epoch(2, 17, {"loss": 1.2}, {"mae_action_units": 0.3}, 0.3)
         tracker.finish(0.3)
         self.assertEqual(run.logged, [({
@@ -209,6 +240,7 @@ class ACTTrainingTests(unittest.TestCase):
             "epoch": 2, "best_mae_action_units": 0.3,
         }, 17)])
         self.assertEqual(run.summary["best_mae_action_units"], 0.3)
+        self.assertEqual(run.summary["model/parameters"], 123)
         self.assertTrue(run.finished)
 
         config = experiment_config(

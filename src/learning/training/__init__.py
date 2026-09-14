@@ -1,6 +1,7 @@
-"""ACT training utilities."""
+"""Policy training utilities."""
 
+from .act_trainer import ACTTrainer
 from .config import ExperimentConfig, TrainConfig
-from .engine import Trainer
+from .engine import PolicyTrainer
 
-__all__ = ["ExperimentConfig", "TrainConfig", "Trainer"]
+__all__ = ["ACTTrainer", "ExperimentConfig", "PolicyTrainer", "TrainConfig"]

@@ -1,10 +1,11 @@
 defaults:
   - dataset: ultra
   - model: act
+  - trainer: act
   - train: default
   - wandb: default
   - _self_
 
 device: auto
-output: outputs/act
+output: outputs/policy
 resume: null

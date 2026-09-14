@@ -1,6 +1,10 @@
-hidden_dim: 256
-latent_dim: 32
-feedforward_dim: 1024
-num_heads: 8
-num_layers: 4
-dropout: 0.1
+name: act
+parameters:
+  hidden_dim: 256
+  latent_dim: 32
+  feedforward_dim: 1024
+  num_heads: 8
+  num_layers: 4
+  dropout: 0.1
+training:
+  kl_weight: 10.0

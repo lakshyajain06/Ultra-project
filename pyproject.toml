@@ -17,9 +17,6 @@ dependencies = [
     "wandb>=0.21,<1",
 ]
 
-[project.scripts]
-ultra-train-act = "learning.training.cli:main"
-
 [project.optional-dependencies]
 teleop = ["isaacteleop[cloudxr]==1.4.142; sys_platform == 'linux' and platform_machine == 'x86_64'"]
 
@@ -31,6 +28,7 @@ where = ["src"]
 "learning.training.conf.dataset" = ["*.yaml"]
 "learning.training.conf.model" = ["*.yaml"]
 "learning.training.conf.train" = ["*.yaml"]
+"learning.training.conf.trainer" = ["*.yaml"]
 "learning.training.conf.wandb" = ["*.yaml"]
 
 [tool.uv]

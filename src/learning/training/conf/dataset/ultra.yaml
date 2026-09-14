@@ -1,10 +1,11 @@
 paths: []
+episode_keys: []
 chunk_size: 25
 state_keys:
   - proprio
 camera_names:
   - head_rgb
-  - left_wrist_rgb
+  # - left_wrist_rgb
   - right_wrist_rgb
 statuses:
   - success

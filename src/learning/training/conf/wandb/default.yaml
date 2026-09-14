@@ -1,4 +1,4 @@
-project: ${oc.env:WANDB_PROJECT,ultra-act}
+project: ${oc.env:WANDB_PROJECT,ultra-policy}
 entity: null
 name: null
 group: null

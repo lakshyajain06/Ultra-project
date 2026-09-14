@@ -43,13 +43,20 @@ class WandbTracker:
         metrics.update({"epoch": epoch, "best_mae_action_units": best})
         self.run.log(metrics, step=step)
 
+    def set_summary(self, values):
+        for key, value in values.items():
+            self.run.summary[key] = value
+
     def finish(self, best):
         self.run.summary["best_mae_action_units"] = best
         self.run.finish()
 
 
-def experiment_config(config, model_config):
+def experiment_config(config, model_config, model_name=None, model_training=None):
     """Return a JSON-compatible snapshot for the wandb run configuration."""
     from dataclasses import asdict
 
-    return json.loads(json.dumps({**asdict(config), "model": model_config.to_dict()}))
+    model = model_config.to_dict()
+    if model_name is not None:
+        model = {"name": model_name, "parameters": model, "training": model_training or {}}
+    return json.loads(json.dumps({**asdict(config), "model": model}))

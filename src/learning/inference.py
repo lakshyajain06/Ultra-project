@@ -1,9 +1,9 @@
-"""Simulator-independent checkpoint loading and observation preprocessing."""
+"""Simulator-independent policy checkpoint loading and preprocessing."""
 
 import numpy as np
 import torch
 
-from .models import ACTConfig, ACTPolicy
+from .models import load_model
 from data.datasets import Normalizer, compose_task_state
 
 
@@ -14,11 +14,14 @@ def _as_numpy(value, dtype):
     return np.asarray(value, dtype=dtype)
 
 
-class ACTInference:
+class PolicyInference:
     """Turn an environment observation into absolute 22-target action chunks."""
 
-    def __init__(self, model, normalizer, state_keys, camera_names, controlled_joint_names, device="cpu"):
+    def __init__(
+        self, model, normalizer, state_keys, camera_names, controlled_joint_names, model_name, device="cpu"
+    ):
         self.model = model.to(device).eval()
+        self.model_name = model_name
         self.normalizer = normalizer
         self.state_keys = tuple(state_keys)
         self.camera_names = tuple(camera_names)
@@ -28,13 +31,13 @@ class ACTInference:
     @classmethod
     def from_checkpoint(cls, path, device="cpu"):
         payload = torch.load(path, map_location=device, weights_only=False)
-        model = ACTPolicy(ACTConfig.from_dict(payload["model_config"]))
-        model.load_state_dict(payload["model"])
+        model_name = payload["model_name"]
+        model = load_model(model_name, payload["model_config"], payload["model"])
         dataset_config = payload["manifest"]["config"]
         return cls(
             model, Normalizer.from_dict(payload["normalizer"]),
             dataset_config["state_keys"], dataset_config["camera_names"],
-            payload["manifest"]["controlled_joint_names"], device,
+            payload["manifest"]["controlled_joint_names"], model_name, device,
         )
 
     @torch.inference_mode()
@@ -44,7 +47,7 @@ class ACTInference:
             state = _as_numpy(observation["proprio"], np.float32)
             if state.ndim == 2:
                 if state.shape[0] != 1:
-                    raise ValueError(f"ACTInference supports one environment; proprio batch is {state.shape[0]}")
+                    raise ValueError(f"PolicyInference supports one environment; proprio batch is {state.shape[0]}")
                 state = state[0]
             if state.ndim != 1 or state.size != self.model.config.state_dim:
                 raise ValueError(
@@ -55,13 +58,17 @@ class ACTInference:
             joint_pos = _as_numpy(observation["joint_pos"], np.float32)
             if joint_pos.ndim == 2:
                 if joint_pos.shape[0] != 1:
-                    raise ValueError(f"ACTInference supports one environment; joint_pos batch is {joint_pos.shape[0]}")
+                    raise ValueError(
+                        f"PolicyInference supports one environment; joint_pos batch is {joint_pos.shape[0]}"
+                    )
                 joint_pos = joint_pos[0]
             joint_pos = joint_pos.reshape(-1)
             eef_pose = _as_numpy(observation["eef_pose_body"], np.float32)
             if eef_pose.ndim == 3:
                 if eef_pose.shape[0] != 1:
-                    raise ValueError(f"ACTInference supports one environment; eef_pose_body batch is {eef_pose.shape[0]}")
+                    raise ValueError(
+                        f"PolicyInference supports one environment; eef_pose_body batch is {eef_pose.shape[0]}"
+                    )
                 eef_pose = eef_pose[0]
             if observation_joint_names is None:
                 if joint_pos.size != len(self.controlled_joint_names):
@@ -84,13 +91,14 @@ class ACTInference:
                 value = _as_numpy(observation[key], np.float32)
                 if key in ("joint_pos", "joint_vel") and value.ndim == 2:
                     if value.shape[0] != 1:
-                        raise ValueError(f"ACTInference supports one environment; {key} batch is {value.shape[0]}")
+                        raise ValueError(f"PolicyInference supports one environment; {key} batch is {value.shape[0]}")
                     value = value[0]
                 value = value.reshape(-1)
                 if key in ("joint_pos", "joint_vel"):
                     if observation_joint_names is None and value.size != len(self.controlled_joint_names):
                         raise ValueError(
-                            f"{key} has {value.size} values; provide observation_joint_names to select controlled joints"
+                            f"{key} has {value.size} values; provide observation_joint_names "
+                            "to select controlled joints"
                         )
                     if observation_joint_names is not None:
                         names = tuple(observation_joint_names)
@@ -108,7 +116,7 @@ class ACTInference:
             image = _as_numpy(observation[name], np.uint8)
             if image.ndim == 4:
                 if image.shape[0] != 1:
-                    raise ValueError(f"ACTInference supports one environment; {name} batch is {image.shape[0]}")
+                    raise ValueError(f"PolicyInference supports one environment; {name} batch is {image.shape[0]}")
                 image = image[0]
             if image.ndim != 3 or image.shape[-1] != 3:
                 raise ValueError(f"{name} must have shape [H,W,3] or [1,H,W,3], got {image.shape}")

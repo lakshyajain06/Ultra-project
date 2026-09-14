@@ -1,23 +1,23 @@
-"""Stateful ACT training engine and self-contained checkpoints."""
+"""Stateful policy training engine and self-contained checkpoints."""
 
+from abc import ABC, abstractmethod
 from dataclasses import asdict
 import json
 from pathlib import Path
 import random
+from time import perf_counter
 
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
 from data.datasets import Normalizer, build_datasets, dataset_manifest
-from learning.models import ACTConfig, ACTPolicy
-
 from .config import ExperimentConfig
 from .tracking import WandbTracker, experiment_config
 
 
-class Trainer:
-    """Own the complete lifecycle of one ACT training run."""
+class PolicyTrainer(ABC):
+    """Shared lifecycle for a trainer selected and instantiated by Hydra."""
 
     def __init__(self, config: ExperimentConfig):
         self.config = config
@@ -28,14 +28,21 @@ class Trainer:
         self._seed_everything(config.train.seed)
         self.train_data, self.validation_data, self.normalizer = build_datasets(config.dataset)
         self.manifest = dataset_manifest(config.dataset, self.train_data, self.validation_data)
-        self.model_config = ACTConfig(
+        model = dict(config.model)
+        self.model_name = model.pop("name")
+        model_parameters = dict(model.pop("parameters", {}))
+        self.model_training = dict(model.pop("training", {}))
+        if model:
+            raise ValueError(f"Unexpected model configuration keys: {sorted(model)}")
+        self.model, self.model_config = self.create_model(
+            self.model_name,
+            model_parameters,
             state_dim=self.normalizer.state_mean.size,
             action_dim=self.normalizer.action_mean.size,
             chunk_size=config.dataset.chunk_size,
             camera_names=config.dataset.camera_names,
-            **asdict(config.model),
         )
-        self.model = ACTPolicy(self.model_config).to(self.device)
+        self.model.to(self.device)
         self.optimizer = torch.optim.AdamW(
             self.model.parameters(), lr=config.train.learning_rate, weight_decay=config.train.weight_decay,
         )
@@ -52,9 +59,21 @@ class Trainer:
     def fit(self):
         tracker = WandbTracker.start(
             **asdict(self.config.wandb), output=self.output,
-            config=experiment_config(self.config, self.model_config),
+            config=experiment_config(
+                self.config, self.model_config, self.model_name, self.model_training,
+            ),
             resume=self.config.resume is not None,
         )
+        tracker.set_summary({
+            "data/train_samples": len(self.train_data),
+            "data/validation_samples": len(self.validation_data),
+            "data/train_episodes": len(self.train_data.episodes),
+            "data/validation_episodes": len(self.validation_data.episodes),
+            "model/parameters": sum(parameter.numel() for parameter in self.model.parameters()),
+            "model/trainable_parameters": sum(
+                parameter.numel() for parameter in self.model.parameters() if parameter.requires_grad
+            ),
+        })
         try:
             for epoch in range(self.start_epoch, self.config.train.epochs):
                 train_loader = DataLoader(
@@ -62,8 +81,9 @@ class Trainer:
                     num_workers=self.config.train.num_workers,
                     generator=torch.Generator().manual_seed(self.config.train.seed + epoch),
                 )
-                train_metrics = self.run_epoch(train_loader, training=True)
-                validation_metrics = self.run_epoch(self.validation_loader, training=False)
+                train_metrics = self.timed_epoch(train_loader, training=True)
+                validation_metrics = self.timed_epoch(self.validation_loader, training=False)
+                train_metrics["learning_rate"] = self.optimizer.param_groups[0]["lr"]
                 self.step += len(train_loader)
                 selection = validation_metrics.get("mae_action_units", train_metrics["mae_action_units"])
                 if selection < self.best:
@@ -78,6 +98,14 @@ class Trainer:
         finally:
             tracker.finish(self.best)
 
+    def timed_epoch(self, loader, *, training):
+        started = perf_counter()
+        metrics = self.run_epoch(loader, training=training)
+        elapsed = perf_counter() - started
+        metrics["epoch_seconds"] = elapsed
+        metrics["samples_per_second"] = len(loader.dataset) / elapsed if elapsed else float("inf")
+        return metrics
+
     def run_epoch(self, loader, *, training):
         self.model.train(training)
         totals, samples = {}, 0
@@ -88,28 +116,36 @@ class Trainer:
                 actions = batch["actions"].to(self.device)
                 is_pad = batch["is_pad"].to(self.device)
                 images = {key: value.to(self.device) for key, value in batch["images"].items()}
-                posterior_actions = actions.masked_fill(is_pad.unsqueeze(-1), 0) if training else None
-                prediction, mu, logvar = self.model(
-                    state, images, posterior_actions, is_pad if training else None,
+                prediction, auxiliary = self.training_forward(
+                    self.model, state, images, actions, is_pad, training,
                 )
-                reconstruction, metrics = self.loss_and_metrics(prediction, actions, is_pad, mu, logvar)
-                loss = reconstruction + self.config.train.kl_weight * metrics["kl"]
+                reconstruction, metrics = self.loss_and_metrics(prediction, actions, is_pad)
+                loss, objective_metrics = self.objective(
+                    reconstruction, auxiliary, self.config.train, self.model_training,
+                )
+                metrics.update(objective_metrics)
                 if training:
                     self.optimizer.zero_grad(set_to_none=True)
                     loss.backward()
-                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+                    gradient_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
                     self.optimizer.step()
-                metrics["loss"] = loss
+                    metrics["gradient_norm"] = gradient_norm
+                metrics.update({
+                    "reconstruction_loss": reconstruction,
+                    "loss": loss,
+                })
                 size = state.shape[0]
                 samples += size
                 valid_steps = int((~is_pad).sum())
                 for key, value in metrics.items():
-                    weight = size if key in ("kl", "loss") else valid_steps
+                    weight = size if key in (
+                        "reconstruction_loss", "kl", "weighted_kl", "loss", "gradient_norm"
+                    ) else valid_steps
                     total, denominator = totals.get(key, (0.0, 0))
                     totals[key] = (total + float(value.detach()) * weight, denominator + weight)
         return {key: total / denominator for key, (total, denominator) in totals.items()} if samples else {}
 
-    def loss_and_metrics(self, prediction, target, is_pad, mu, logvar):
+    def loss_and_metrics(self, prediction, target, is_pad):
         valid = (~is_pad).unsqueeze(-1)
         difference = (prediction - target).abs()
         normalized_mae = difference.masked_select(valid.expand_as(difference)).mean()
@@ -125,19 +161,29 @@ class Trainer:
         jaw_mae = physical_difference.index_select(-1, jaw_indices).masked_select(
             valid.expand(*valid.shape[:-1], jaw_indices.numel())
         ).mean()
-        kl = prediction.new_zeros(()) if mu is None else (
-            -0.5 * (1 + logvar - mu.square() - logvar.exp())
-        ).sum(-1).mean()
         return normalized_mae, {
             "mae_normalized": normalized_mae, "mae_action_units": physical_mae,
-            "mae_joint_radians": joint_mae, "mae_jaw_metres": jaw_mae, "kl": kl,
+            "mae_joint_radians": joint_mae, "mae_jaw_metres": jaw_mae,
         }
+
+    @abstractmethod
+    def create_model(self, model_name, parameters, **contract):
+        """Construct the configured policy model and its serializable config."""
+
+    @abstractmethod
+    def training_forward(self, model, state, images, actions, is_pad, training):
+        """Run the model's training or validation forward pass."""
+
+    @abstractmethod
+    def objective(self, reconstruction, auxiliary, train_config, model_training):
+        """Combine reconstruction and model-specific objective terms."""
 
     def save_checkpoint(self, path, epoch):
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "model": self.model.state_dict(), "optimizer": self.optimizer.state_dict(),
+            "model_name": self.model_name,
             "model_config": self.model_config.to_dict(), "train_config": asdict(self.config.train),
             "experiment_config": asdict(self.config), "normalizer": self.normalizer.to_dict(),
             "manifest": self.manifest, "epoch": epoch, "step": self.step, "best_metric": self.best,
@@ -151,6 +197,8 @@ class Trainer:
 
     def restore(self, path, *, restore_rng=True):
         payload = torch.load(path, map_location=self.device, weights_only=False)
+        if payload["model_name"] != self.model_name:
+            raise ValueError("Resume model family differs from the checkpoint")
         if payload["model_config"] != self.model_config.to_dict():
             raise ValueError("Resume model configuration differs from the checkpoint")
         if payload["manifest"] != self.manifest:
