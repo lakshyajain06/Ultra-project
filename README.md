@@ -109,9 +109,11 @@ uv run --locked --extra teleop python scripts/teleop_ultra.py \
   --task "Place the cube on the plate"
 ```
 
-The runner enables XR automatically. In the Kit XR panel select OpenXR /
-System OpenXR Runtime and click Start XR if it is not already running.
-`--viz none` skips the desktop viewer and uses the headset's immersive view.
+The runner enables XR automatically. With `--viz none`, it also starts the AR
+profile programmatically, so no desktop XR-panel interaction is required. With
+the Kit viewer, use the XR panel to select OpenXR / System OpenXR Runtime and
+start or stop XR manually. `--viz none` skips the desktop viewer and uses the
+headset's immersive view.
 When `--dataset` is present, the collector enables the authored Ultra head
 camera (`zed_left`) and both wrist cameras and records synchronized RGB frames.
 The default resolution is 320x240; use `--camera_width` and `--camera_height`
