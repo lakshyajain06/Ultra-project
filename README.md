@@ -497,6 +497,12 @@ The layout is third-person/head on the top row and left/right wrist on the
 bottom row. Existing episode files are never overwritten. Pass `--no-record`
 for metrics-only evaluation without cameras or videos.
 
+Parallel evaluation environments are spaced 25 metres apart by default so
+neighboring robot clones do not contaminate the policy or recorded camera
+views. Use `--env-spacing N` to override this distance. Evaluation uses the
+same grid ground plane as teleoperation, keeping the visual background aligned
+with the training data.
+
 Isaac Sim's detailed startup and shutdown output is written to `isaac.log` in
 the same timestamped evaluation directory. The console shows only checkpoint,
 startup, environment, recording, and episode progress plus result JSON. Pass

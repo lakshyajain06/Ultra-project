@@ -2,7 +2,6 @@
 
 import isaaclab.envs.mdp as base_mdp
 import isaaclab.sim as sim_utils
-from isaaclab.assets import AssetBaseCfg
 from isaaclab.envs import ManagerBasedRLEnvCfg
 from isaaclab.envs.mdp.actions import JointPositionActionCfg
 from isaaclab.managers import EventTermCfg as EventTerm
@@ -44,18 +43,7 @@ def _robot_camera(prim_path: str, width: int = 320, height: int = 240) -> Camera
 
 @configclass
 class UltraRLSceneCfg(UltraTabletopSceneCfg):
-    """Training scene with a local ground asset (no Nucleus dependency)."""
-
-    ground = AssetBaseCfg(
-        prim_path="/World/Ground",
-        spawn=sim_utils.CuboidCfg(
-            size=(100.0, 100.0, 0.1),
-            collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=True),
-            physics_material=sim_utils.RigidBodyMaterialCfg(static_friction=0.9, dynamic_friction=0.8, restitution=0.0),
-            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.18, 0.18, 0.20), roughness=0.8),
-        ),
-        init_state=AssetBaseCfg.InitialStateCfg(pos=(0.0, 0.0, -0.05)),
-    )
+    """Manager scene sharing the same ground and appearance as teleoperation."""
 
 
 @configclass

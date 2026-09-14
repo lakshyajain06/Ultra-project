@@ -35,6 +35,12 @@ parser.add_argument(
 parser.add_argument("--camera-width", type=int, default=320)
 parser.add_argument("--camera-height", type=int, default=240)
 parser.add_argument(
+    "--env-spacing",
+    type=float,
+    default=25.0,
+    help="Distance between parallel environments in metres (default: 25, to isolate camera views)",
+)
+parser.add_argument(
     "--record-dir",
     type=Path,
     help="Override the timestamped MP4 recording directory",
@@ -53,8 +59,8 @@ if min(args.episodes, args.num_envs, args.chunk_steps) <= 0:
     parser.error("--episodes, --num-envs, and --chunk-steps must be positive")
 if args.max_steps <= 0:
     parser.error("--max-steps must be positive")
-if min(args.camera_width, args.camera_height) <= 0:
-    parser.error("camera dimensions must be positive")
+if min(args.camera_width, args.camera_height, args.env_spacing) <= 0:
+    parser.error("camera dimensions and --env-spacing must be positive")
 if args.video_fps <= 0:
     parser.error("--video-fps must be positive")
 if args.no_record and args.record_dir is not None:
@@ -259,6 +265,7 @@ def main():
     else:
         cfg = UltraCubePlateEnvCfg()
     cfg.scene.num_envs = args.num_envs
+    cfg.scene.env_spacing = args.env_spacing
     cfg.sim.device = args.device
     if args.record_dir:
         cfg.scene.camera = CameraCfg(
@@ -271,7 +278,7 @@ def main():
                 focal_length=24.0,
                 focus_distance=4.0,
                 horizontal_aperture=20.955,
-                clipping_range=(0.1, 100.0),
+                clipping_range=(0.1, 10.0),
             ),
         )
     cfg.episode_length_s = args.max_steps * cfg.decimation * cfg.sim.dt
