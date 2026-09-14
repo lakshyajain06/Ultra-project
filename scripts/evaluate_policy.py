@@ -29,7 +29,8 @@ parser.add_argument(
 parser.add_argument(
     "--max-steps",
     type=int,
-    help="Optional episode time limit in policy steps (default: environment's 120 seconds)",
+    default=200,
+    help="Episode time limit in policy steps (default: 200, or 8 seconds at 25 Hz)",
 )
 parser.add_argument("--camera-width", type=int, default=320)
 parser.add_argument("--camera-height", type=int, default=240)
@@ -50,7 +51,7 @@ if not args.checkpoint.is_file():
     parser.error(f"Checkpoint does not exist: {args.checkpoint}")
 if min(args.episodes, args.num_envs, args.chunk_steps) <= 0:
     parser.error("--episodes, --num-envs, and --chunk-steps must be positive")
-if args.max_steps is not None and args.max_steps <= 0:
+if args.max_steps <= 0:
     parser.error("--max-steps must be positive")
 if min(args.camera_width, args.camera_height) <= 0:
     parser.error("camera dimensions must be positive")
@@ -273,8 +274,7 @@ def main():
                 clipping_range=(0.1, 100.0),
             ),
         )
-    if args.max_steps is not None:
-        cfg.episode_length_s = args.max_steps * cfg.decimation * cfg.sim.dt
+    cfg.episode_length_s = args.max_steps * cfg.decimation * cfg.sim.dt
 
     env = None
     results = []

@@ -506,9 +506,11 @@ The evaluator selects the state or vision environment from the cameras stored
 in the checkpoint, uses the manager's success/drop/timeout terms, and prints
 one JSON record per episode followed by an aggregate `EVALUATION` record. It
 executes the first action of each predicted chunk by default. Set
-`--chunk-steps N` to execute up to `N` actions open-loop, and use `--max-steps`
-to impose a shorter episode limit for quick checks. Environments run in
-parallel and are assigned new episode IDs as they finish. With recording
+`--chunk-steps N` to execute up to `N` actions open-loop. Episodes time out
+after 200 policy steps (8 seconds at 25 Hz) by default; override that with
+`--max-steps N`. This default includes margin over the longest successful
+demonstration in `ultra_full.hdf5` (173 steps; success mean 145.2). Environments
+run in parallel and are assigned new episode IDs as they finish. With recording
 enabled, each active environment writes its own episode video.
 
 Run the CPU-only synthetic-data tests with:
