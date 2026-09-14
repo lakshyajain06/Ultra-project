@@ -2,6 +2,7 @@
 """Evaluate a policy checkpoint in the manager-based Ultra environment."""
 
 import argparse
+from datetime import datetime
 import json
 from pathlib import Path
 
@@ -32,8 +33,9 @@ parser.add_argument("--camera-height", type=int, default=240)
 parser.add_argument(
     "--record-dir",
     type=Path,
-    help="Write one synchronized 2x2 MP4 per episode to this directory",
+    help="Override the timestamped evaluation recording directory",
 )
+parser.add_argument("--no-record", action="store_true", help="Disable evaluation video recording")
 parser.add_argument("--video-fps", type=int, default=25, help="Frame rate for evaluation videos")
 AppLauncher.add_app_launcher_args(parser)
 # Add required positionals after AppLauncher: it probes the partially-built
@@ -51,6 +53,11 @@ if min(args.camera_width, args.camera_height) <= 0:
     parser.error("camera dimensions must be positive")
 if args.video_fps <= 0:
     parser.error("--video-fps must be positive")
+if args.no_record and args.record_dir is not None:
+    parser.error("--no-record cannot be combined with --record-dir")
+if args.record_dir is None and not args.no_record:
+    timestamp = datetime.now().astimezone().strftime("%Y%m%d_%H%M%S_%z")
+    args.record_dir = Path("outputs/evaluation") / timestamp
 if args.record_dir is not None:
     existing = [args.record_dir / f"episode_{index:04d}.mp4" for index in range(args.episodes)]
     existing = [path for path in existing if path.exists()]

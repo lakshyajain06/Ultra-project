@@ -477,8 +477,10 @@ uv run --locked python scripts/evaluate_policy.py outputs/policy/place_cube/best
   --viz none --episodes 100 --num-envs 16
 ```
 
-Record each episode as a synchronized 2x2 MP4 containing third-person, head,
-left-wrist, and right-wrist views:
+Recording is enabled by default. Each run creates a timestamped directory such
+as `outputs/evaluation/20260914_153012_-0400` and writes one synchronized 2x2
+MP4 per episode containing third-person, head, left-wrist, and right-wrist
+views. Override the destination when needed:
 
 ```bash
 uv run --locked python scripts/evaluate_policy.py outputs/policy/place_cube/best.pt \
@@ -486,7 +488,8 @@ uv run --locked python scripts/evaluate_policy.py outputs/policy/place_cube/best
 ```
 
 The layout is third-person/head on the top row and left/right wrist on the
-bottom row. Existing episode files are never overwritten.
+bottom row. Existing episode files are never overwritten. Pass `--no-record`
+for metrics-only evaluation without cameras or videos.
 
 The evaluator selects the state or vision environment from the cameras stored
 in the checkpoint, uses the manager's success/drop/timeout terms, and prints
