@@ -156,13 +156,11 @@ the affected grip before moving again. Orientations use XYZW quaternions.
 Translation scale defaults to 1.0 (`--scale`);
 the two controllers solve only their corresponding seven-joint arms. The
 thumbsticks solve the shared body link through Ultra's six torso joints, so the
-entire bimanual assembly moves with it. Use `--anchor_pos X Y Z` to place the
-Quest user's physical origin in the simulation (default `0 1.8 0`) and
-`--anchor_yaw DEGREES` to turn the view about world Z. Ultra faces world -Y;
-if the scene is behind you, restart with `--anchor_yaw 180`. Increasing anchor
-Y moves the user farther behind Ultra, and changing anchor Z raises/lowers the
-virtual floor relative to the user. This anchor is an initial placement, not a
-camera rigidly attached to the robot.
+entire bimanual assembly moves with it. The Quest view is dynamically anchored
+to Ultra's `zed_left` head camera, following its position and full orientation.
+Use `--anchor_pos X Y Z` for a world-axis offset from that camera (default
+`0 0 0`) and `--anchor_yaw DEGREES` for a local yaw offset. The dynamic anchor
+remains attached as Ultra's head moves.
 
 Control runs at 25 Hz over the existing 50 Hz physics. Damped least-squares IK
 uses one solve per palm and a separate solve for the shared body support.

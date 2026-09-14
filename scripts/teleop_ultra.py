@@ -24,8 +24,11 @@ parser.add_argument(
 parser.add_argument("--episode_seconds", type=float, default=120.0)
 parser.add_argument("--camera_width", type=int, default=320)
 parser.add_argument("--camera_height", type=int, default=240)
-parser.add_argument("--anchor_pos", nargs=3, type=float, default=(0.0, 1.8, 0.0))
-parser.add_argument("--anchor_yaw", type=float, default=0.0, help="Rotate the XR view about world Z, in degrees")
+parser.add_argument(
+    "--anchor_pos", nargs=3, type=float, default=(0.0, 0.0, 0.0),
+    help="XYZ offset in metres from Ultra's head camera",
+)
+parser.add_argument("--anchor_yaw", type=float, default=0.0, help="Yaw offset from Ultra's head camera, in degrees")
 AppLauncher.add_app_launcher_args(parser)
 args = parser.parse_args()
 if min(args.scale, args.episode_seconds) <= 0 or args.steps < 0:
@@ -58,7 +61,20 @@ from scipy.spatial.transform import Rotation
 from data.recording import EpisodeRecorder
 from sim.teleop.control import BodyTargetMapper, ClutchMapper
 from sim.teleop.env import UltraTeleopEnv, numpy
+from sim.envs.cube_plate_pick_place.ultra_tabletop_scene_cfg import ROBOT_CAMERA_PATHS
 from sim.robots.ultra.ultra_cfg import ULTRA_USD, REPO_ROOT
+
+HEAD_CAMERA_PRIM_PATH = ROBOT_CAMERA_PATHS["head_rgb"].replace("{ENV_REGEX_NS}", "/World/envs/env_0")
+
+
+def head_camera_anchor_rotation(yaw_offset_degrees):
+    """Return an XR callback that follows the head camera with a yaw offset."""
+    offset = Rotation.from_euler("z", yaw_offset_degrees, degrees=True)
+
+    def rotation(_head_pose, camera_pose):
+        return (Rotation.from_quat(camera_pose[3:7]) * offset).as_quat()
+
+    return rotation
 
 
 def main():
@@ -117,7 +133,13 @@ def main():
             recorder = EpisodeRecorder(args.dataset, metadata)
             stack.callback(recorder.close)
         if not args.smoke:
-            from isaaclab_teleop import IsaacTeleopCfg, XrCfg, CLOUDXR_JS_ENV, create_isaac_teleop_device
+            from isaaclab_teleop import (
+                CLOUDXR_JS_ENV,
+                IsaacTeleopCfg,
+                XrAnchorRotationMode,
+                XrCfg,
+                create_isaac_teleop_device,
+            )
             from isaacteleop.teleop_session_manager import RetargetingExecutionConfig
             from sim.teleop.input import build_pipeline
 
@@ -125,7 +147,10 @@ def main():
                 pipeline_builder=build_pipeline, sim_device=args.device,
                 xr_cfg=XrCfg(
                     anchor_pos=tuple(args.anchor_pos),
-                    anchor_rot=tuple(Rotation.from_euler("z", args.anchor_yaw, degrees=True).as_quat()),
+                    anchor_prim_path=HEAD_CAMERA_PRIM_PATH,
+                    anchor_rotation_mode=XrAnchorRotationMode.CUSTOM,
+                    anchor_rotation_custom_func=head_camera_anchor_rotation(args.anchor_yaw),
+                    fixed_anchor_height=False,
                 ),
                 retargeting_execution=RetargetingExecutionConfig(mode="sync"),
             )
@@ -134,7 +159,8 @@ def main():
                 "Head and both wrist RGB cameras are recorded."
                 if args.dataset else "Camera recording is disabled without --dataset."
             )
-            print("Quest: open the release-1.4.x CloudXR client; enter host IP and Connect.\n"
+            print("Quest view follows Ultra's head camera. Open the release-1.4.x CloudXR client; "
+                  "enter host IP and Connect.\n"
                   "Hold controllers comfortably and release grips; initial tracking calibrates wrist alignment.\n"
                   "Then hold a grip to move that arm. Triggers control jaws.\n"
                   "Left stick moves the shared body in the table plane; right stick controls body yaw/height.\n"
