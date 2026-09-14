@@ -1,0 +1,10 @@
+defaults:
+  - dataset: ultra
+  - model: act
+  - train: default
+  - wandb: default
+  - _self_
+
+device: auto
+output: outputs/act
+resume: null

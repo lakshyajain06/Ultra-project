@@ -8,12 +8,14 @@ import unittest
 import h5py
 import numpy as np
 import torch
+from omegaconf import OmegaConf
 from torch.utils.data import DataLoader
 
-from data.datasets import DatasetConfig, build_datasets, compose_task_state, dataset_manifest
+from data.datasets import DatasetConfig, build_datasets, compose_task_state
 from learning.inference import ACTInference
 from learning.models import ACTConfig, ACTPolicy
-from learning.training.engine import TrainConfig, restore_checkpoint, run_epoch, save_checkpoint
+from learning.training.config import ACTArchitectureConfig, ExperimentConfig, TrainConfig
+from learning.training.engine import Trainer
 from learning.training.tracking import WandbTracker, experiment_config
 
 
@@ -61,6 +63,19 @@ class ACTTrainingTests(unittest.TestCase):
         values = dict(paths=(str(self.path),), chunk_size=3, validation_fraction=0.5, seed=7)
         values.update(overrides)
         return DatasetConfig(**values)
+
+    def test_hydra_structured_config_round_trip(self):
+        structured = OmegaConf.structured(ExperimentConfig)
+        merged = OmegaConf.merge(structured, {
+            "dataset": {"paths": [str(self.path)], "camera_names": []},
+            "train": {"batch_size": 8},
+            "wandb": {"mode": "disabled"},
+        })
+        config = OmegaConf.to_object(merged)
+        self.assertIsInstance(config, ExperimentConfig)
+        self.assertEqual(config.dataset.paths, (str(self.path),))
+        self.assertEqual(config.dataset.camera_names, ())
+        self.assertEqual(config.train.batch_size, 8)
 
     def test_episode_split_normalization_and_padding(self):
         train, validation, normalizer = build_datasets(self.config())
@@ -127,21 +142,25 @@ class ACTTrainingTests(unittest.TestCase):
 
     def test_forward_train_checkpoint_and_inference(self):
         config = self.config(validation_fraction=0)
-        train, validation, normalizer = build_datasets(config)
-        model_config = ACTConfig(
-            state_dim=22, action_dim=22, chunk_size=3, camera_names=CAMERAS,
-            hidden_dim=32, latent_dim=4, feedforward_dim=64, num_heads=4, num_layers=1, dropout=0,
+        experiment = ExperimentConfig(
+            dataset=config,
+            model=ACTArchitectureConfig(
+                hidden_dim=32, latent_dim=4, feedforward_dim=64, num_heads=4, num_layers=1, dropout=0,
+            ),
+            train=TrainConfig(batch_size=2, learning_rate=1e-3, kl_weight=0.1, num_workers=0),
+            device="cpu",
+            output=str(Path(self.temporary.name) / "run"),
         )
-        model = ACTPolicy(model_config)
-        optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
-        loader = DataLoader(train, batch_size=2)
-        metrics = run_epoch(model, loader, "cpu", torch.from_numpy(normalizer.action_std), optimizer, kl_weight=0.1)
+        trainer = Trainer(experiment)
+        loader = DataLoader(trainer.train_data, batch_size=2)
+        metrics = trainer.run_epoch(loader, training=True)
         self.assertTrue(all(np.isfinite(value) for value in metrics.values()))
         checkpoint = Path(self.temporary.name) / "checkpoint.pt"
-        manifest = dataset_manifest(config, train, validation)
-        save_checkpoint(checkpoint, model, optimizer, 0, len(loader), normalizer, TrainConfig(), manifest, 1.0)
-        clone = ACTPolicy(model_config)
-        payload = restore_checkpoint(checkpoint, clone, device="cpu", restore_rng=False)
+        trainer.step = len(loader)
+        trainer.best = 1.0
+        trainer.save_checkpoint(checkpoint, epoch=0)
+        clone = Trainer(experiment)
+        payload = clone.restore(checkpoint, restore_rng=False)
         self.assertEqual(payload["model_config"]["action_dim"], 22)
         runner = ACTInference.from_checkpoint(checkpoint)
         with h5py.File(self.path) as handle:
@@ -193,7 +212,7 @@ class ACTTrainingTests(unittest.TestCase):
         self.assertTrue(run.finished)
 
         config = experiment_config(
-            TrainConfig(), self.config(), ACTConfig(), device="cpu", output=Path("outputs/test"),
+            ExperimentConfig(dataset=self.config(), device="cpu", output="outputs/test"), ACTConfig(),
         )
         self.assertEqual(config["dataset"]["paths"], [str(self.path)])
         self.assertEqual(config["model"]["state_dim"], 22)

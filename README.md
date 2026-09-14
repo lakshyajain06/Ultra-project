@@ -359,31 +359,37 @@ The loader uses `observation_joint_names` metadata to select torso and gripper
 positions from legacy 24-DOF recordings and combines them with
 `obs/eef_pose_body`; the two passive jaw followers are never included.
 State and action statistics are fitted on the training episodes only and stored
-inside every checkpoint.
+inside every checkpoint. Training uses one structured Hydra configuration with
+`dataset`, `model`, `train`, and `wandb` sections; command-line values use
+Hydra's `section.key=value` override syntax.
 
 Train on one or more collections:
 
 ```bash
-uv run python scripts/train_act.py datasets/ultra_001.hdf5 datasets/ultra_002.hdf5 \
-  --output outputs/act/place_cube --epochs 100 --batch-size 16
+uv run python scripts/train_act.py \
+  'dataset.paths=[datasets/ultra_001.hdf5,datasets/ultra_002.hdf5]' \
+  output=outputs/act/place_cube train.epochs=100 train.batch_size=16
 ```
 
 Only `success` episodes are selected by default. Status selection is explicit;
 for exploratory training on a collection containing only aborted episodes use,
-for example, `--statuses aborted`. Splitting is deterministic and performed by
+for example, `dataset.statuses=[aborted]`. Splitting is deterministic and performed by
 episode, preventing transitions from one demonstration leaking across train and
-validation sets. Use `--seed`, `--validation-fraction`, `--chunk-size`,
-`--state-keys`, and `--cameras` to configure the input contract. The optional
+validation sets. Use `train.seed`, `dataset.validation_fraction`,
+`dataset.chunk_size`, `dataset.state_keys`, and `dataset.camera_names` to configure the input contract. The optional
 legacy 44D controlled q/qdot state remains available with
-`--state-keys joint_pos joint_vel`. Cameras can be
-removed independently, including all of them (`--cameras` with no following
-values), without changing the dataset format.
+`dataset.state_keys=[joint_pos,joint_vel]`. Cameras can be removed independently,
+including all of them (`dataset.camera_names=[]`), without changing the dataset
+format. Run with `--help` to inspect the complete typed configuration tree.
+Configuration files live under `src/learning/training/conf`; Hydra groups make
+presets composable, for example `train=debug wandb=offline`. The dataclass
+schema still validates the fully composed configuration before training starts.
 
 Resume an interrupted run with the same architecture and data arguments:
 
 ```bash
-uv run python scripts/train_act.py datasets/ultra_001.hdf5 \
-  --output outputs/act/place_cube --resume outputs/act/place_cube/latest.pt
+uv run python scripts/train_act.py 'dataset.paths=[datasets/ultra_001.hdf5]' \
+  output=outputs/act/place_cube resume=outputs/act/place_cube/latest.pt
 ```
 
 `latest.pt` and `best.pt` are written at epoch boundaries and contain model and optimizer state, model/training
@@ -399,15 +405,15 @@ Training is tracked with Weights & Biases by default under the `ultra-act`
 project:
 
 ```bash
-uv run python scripts/train_act.py datasets/ultra_001.hdf5 \
-  --wandb-name place-cube-baseline
+uv run python scripts/train_act.py \
+  'dataset.paths=[datasets/ultra_001.hdf5]' wandb.name=place-cube-baseline
 ```
 
 The run records the complete train/dataset/model configuration and namespaced
-train and validation metrics at each optimizer step. `--wandb-entity`,
-`--wandb-group`, `--wandb-tags`, and `--wandb-mode offline` are also supported.
-When `--resume` is used with the same output directory, tracking resumes the
-saved W&B run ID. Use `--wandb-mode disabled` for an intentionally untracked
+train and validation metrics at each optimizer step. `wandb.entity`,
+`wandb.group`, `wandb.tags`, and `wandb.mode=offline` are also supported.
+When `resume=` is used with the same output directory, tracking resumes the
+saved W&B run ID. Use `wandb.mode=disabled` for an intentionally untracked
 run.
 
 For manager-environment integration, pass the same observation dictionary to

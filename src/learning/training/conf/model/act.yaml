@@ -1,0 +1,6 @@
+hidden_dim: 256
+latent_dim: 32
+feedforward_dim: 1024
+num_heads: 8
+num_layers: 4
+dropout: 0.1

@@ -1,0 +1,6 @@
+project: ${oc.env:WANDB_PROJECT,ultra-act}
+entity: null
+name: null
+group: null
+tags: []
+mode: ${oc.env:WANDB_MODE,online}

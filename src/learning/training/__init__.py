@@ -1,5 +1,6 @@
 """ACT training utilities."""
 
-from .engine import TrainConfig, restore_checkpoint, run_epoch, save_checkpoint
+from .config import ExperimentConfig, TrainConfig
+from .engine import Trainer
 
-__all__ = ["TrainConfig", "restore_checkpoint", "run_epoch", "save_checkpoint"]
+__all__ = ["ExperimentConfig", "TrainConfig", "Trainer"]
