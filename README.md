@@ -373,8 +373,14 @@ Train on one or more collections:
 ```bash
 uv run python scripts/train_policy.py \
   'dataset.paths=[datasets/ultra_001.hdf5,datasets/ultra_002.hdf5]' \
-  output=outputs/policy/place_cube train.epochs=100 train.batch_size=16
+  train.epochs=100 train.batch_size=16
 ```
+
+By default each run creates a timestamped directory such as
+`outputs/training/20260914_153012_-0400`. It contains `config.yaml` with the
+fully composed Hydra configuration, `manifest.json`, `latest.pt`, `best.pt`,
+and the run's tracking files. Set `output=outputs/policy/place_cube` when a
+specific directory is preferred.
 
 Only `success` episodes are selected by default. Status selection is explicit;
 for exploratory training on a collection containing only aborted episodes use,

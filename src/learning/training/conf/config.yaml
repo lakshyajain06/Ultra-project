@@ -7,5 +7,13 @@ defaults:
   - _self_
 
 device: auto
-output: outputs/policy
+output: null
 resume: null
+
+# The training script owns run-directory creation and config persistence.
+hydra:
+  run:
+    dir: .
+  output_subdir: null
+  job:
+    chdir: false

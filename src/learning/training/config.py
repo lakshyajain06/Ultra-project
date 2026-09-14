@@ -34,5 +34,5 @@ class ExperimentConfig:
     train: TrainConfig = field(default_factory=TrainConfig)
     wandb: WandbConfig = field(default_factory=WandbConfig)
     device: str = "auto"
-    output: str = "outputs/policy"
+    output: str | None = None
     resume: str | None = None
