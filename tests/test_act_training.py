@@ -14,6 +14,7 @@ from data.datasets import DatasetConfig, build_datasets, compose_task_state, dat
 from learning.inference import ACTInference
 from learning.models import ACTConfig, ACTPolicy
 from learning.training.engine import TrainConfig, restore_checkpoint, run_epoch, save_checkpoint
+from learning.training.tracking import WandbTracker, experiment_config
 
 
 CAMERAS = ("head_rgb", "left_wrist_rgb", "right_wrist_rgb")
@@ -166,6 +167,36 @@ class ACTTrainingTests(unittest.TestCase):
         np.testing.assert_allclose(torch_prediction, manager_prediction)
         with self.assertRaisesRegex(ValueError, "supports one environment"):
             runner.predict({**manager_observation, "proprio": np.repeat(manager_observation["proprio"], 2, axis=0)})
+
+    def test_wandb_metric_names_and_config_are_stable(self):
+        class FakeRun:
+            def __init__(self):
+                self.logged = []
+                self.summary = {}
+                self.finished = False
+
+            def log(self, metrics, step):
+                self.logged.append((metrics, step))
+
+            def finish(self):
+                self.finished = True
+
+        run = FakeRun()
+        tracker = WandbTracker(run)
+        tracker.log_epoch(2, 17, {"loss": 1.2}, {"mae_action_units": 0.3}, 0.3)
+        tracker.finish(0.3)
+        self.assertEqual(run.logged, [({
+            "train/loss": 1.2, "validation/mae_action_units": 0.3,
+            "epoch": 2, "best_mae_action_units": 0.3,
+        }, 17)])
+        self.assertEqual(run.summary["best_mae_action_units"], 0.3)
+        self.assertTrue(run.finished)
+
+        config = experiment_config(
+            TrainConfig(), self.config(), ACTConfig(), device="cpu", output=Path("outputs/test"),
+        )
+        self.assertEqual(config["dataset"]["paths"], [str(self.path)])
+        self.assertEqual(config["model"]["state_dim"], 22)
 
 
 if __name__ == "__main__":

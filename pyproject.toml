@@ -12,6 +12,7 @@ dependencies = [
     "isaaclab[isaacsim]==3.0.0b2.post1",
     "h5py>=3.14,<4",
     "scipy>=1.15,<2",
+    "wandb>=0.21,<1",
 ]
 
 [project.scripts]

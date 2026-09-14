@@ -395,6 +395,21 @@ separate joint-target MAE in radians and jaw-target MAE in metres, KL loss, and
 total loss. The best checkpoint is selected using validation MAE in action units
 (or training MAE when no validation episodes are requested).
 
+Training is tracked with Weights & Biases by default under the `ultra-act`
+project:
+
+```bash
+uv run python scripts/train_act.py datasets/ultra_001.hdf5 \
+  --wandb-name place-cube-baseline
+```
+
+The run records the complete train/dataset/model configuration and namespaced
+train and validation metrics at each optimizer step. `--wandb-entity`,
+`--wandb-group`, `--wandb-tags`, and `--wandb-mode offline` are also supported.
+When `--resume` is used with the same output directory, tracking resumes the
+saved W&B run ID. Use `--wandb-mode disabled` for an intentionally untracked
+run.
+
 For manager-environment integration, pass the same observation dictionary to
 the simulator-independent inference wrapper:
 

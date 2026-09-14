@@ -11,6 +11,7 @@ from torch.utils.data import DataLoader
 from data.datasets import DatasetConfig, Normalizer, build_datasets, dataset_manifest
 from learning.models import ACTConfig, ACTPolicy
 from .engine import TrainConfig, restore_checkpoint, run_epoch, save_checkpoint, seed_everything
+from .tracking import WandbTracker, experiment_config
 
 
 def parser():
@@ -36,6 +37,12 @@ def parser():
     value.add_argument("--feedforward-dim", type=int, default=1024)
     value.add_argument("--num-heads", type=int, default=8)
     value.add_argument("--num-layers", type=int, default=4)
+    value.add_argument("--wandb-project", default="ultra-act")
+    value.add_argument("--wandb-entity")
+    value.add_argument("--wandb-name")
+    value.add_argument("--wandb-group")
+    value.add_argument("--wandb-tags", nargs="*", default=())
+    value.add_argument("--wandb-mode", choices=("online", "offline", "disabled"), default="online")
     return value
 
 
@@ -75,24 +82,35 @@ def main(argv=None):
     action_std = torch.as_tensor(normalizer.action_std, device=args.device)
     args.output.mkdir(parents=True, exist_ok=True)
     (args.output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
-    for epoch in range(start_epoch, args.epochs):
-        # Epoch-derived ordering makes a resumed run match an uninterrupted run.
-        train_loader = DataLoader(
-            train_data, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers,
-            generator=torch.Generator().manual_seed(args.seed + epoch),
-        )
-        train_metrics = run_epoch(model, train_loader, args.device, action_std, optimizer, args.kl_weight)
-        validation_metrics = run_epoch(model, validation_loader, args.device, action_std)
-        step += len(train_loader)
-        selection = validation_metrics.get("mae_action_units", train_metrics["mae_action_units"])
-        if selection < best:
-            best = selection
+    tracker = WandbTracker.start(
+        project=args.wandb_project, entity=args.wandb_entity, name=args.wandb_name,
+        group=args.wandb_group, tags=args.wandb_tags, mode=args.wandb_mode,
+        output=args.output, config=experiment_config(
+            train_config, dataset_config, model_config, device=args.device, output=args.output,
+        ), resume=args.resume is not None,
+    )
+    try:
+        for epoch in range(start_epoch, args.epochs):
+            # Epoch-derived ordering makes a resumed run match an uninterrupted run.
+            train_loader = DataLoader(
+                train_data, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers,
+                generator=torch.Generator().manual_seed(args.seed + epoch),
+            )
+            train_metrics = run_epoch(model, train_loader, args.device, action_std, optimizer, args.kl_weight)
+            validation_metrics = run_epoch(model, validation_loader, args.device, action_std)
+            step += len(train_loader)
+            selection = validation_metrics.get("mae_action_units", train_metrics["mae_action_units"])
+            if selection < best:
+                best = selection
+                save_checkpoint(
+                    args.output / "best.pt", model, optimizer, epoch, step, normalizer,
+                    train_config, manifest, best,
+                )
             save_checkpoint(
-                args.output / "best.pt", model, optimizer, epoch, step, normalizer,
+                args.output / "latest.pt", model, optimizer, epoch, step, normalizer,
                 train_config, manifest, best,
             )
-        save_checkpoint(
-            args.output / "latest.pt", model, optimizer, epoch, step, normalizer,
-            train_config, manifest, best,
-        )
-        print(json.dumps({"epoch": epoch, "train": train_metrics, "validation": validation_metrics, "best": best}))
+            tracker.log_epoch(epoch, step, train_metrics, validation_metrics, best)
+            print(json.dumps({"epoch": epoch, "train": train_metrics, "validation": validation_metrics, "best": best}))
+    finally:
+        tracker.finish(best)

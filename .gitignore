@@ -26,3 +26,4 @@ datasets/
 *.mkv
 # Separate, locally modified upstream checkout; this project does not vendor it.
 third_party/
+.env
