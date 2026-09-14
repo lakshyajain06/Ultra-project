@@ -210,12 +210,17 @@ class ACTTrainingTests(unittest.TestCase):
             **{name: observation[name][None] for name in CAMERAS},
         }
         manager_prediction = runner.predict(manager_observation)
-        np.testing.assert_allclose(manager_prediction, prediction)
+        self.assertEqual(manager_prediction.shape, (1, 3, 22))
+        np.testing.assert_allclose(manager_prediction[0], prediction)
         torch_observation = {key: torch.from_numpy(value) for key, value in manager_observation.items()}
         torch_prediction = runner.predict(torch_observation)
         np.testing.assert_allclose(torch_prediction, manager_prediction)
-        with self.assertRaisesRegex(ValueError, "supports one environment"):
-            runner.predict({**manager_observation, "proprio": np.repeat(manager_observation["proprio"], 2, axis=0)})
+        batched_observation = {
+            key: np.repeat(value, 2, axis=0) for key, value in manager_observation.items()
+        }
+        batched_prediction = runner.predict(batched_observation)
+        self.assertEqual(batched_prediction.shape, (2, 3, 22))
+        np.testing.assert_allclose(batched_prediction[0], batched_prediction[1], atol=1e-6)
 
     def test_wandb_metric_names_and_config_are_stable(self):
         class FakeRun:

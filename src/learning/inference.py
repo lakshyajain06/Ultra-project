@@ -42,84 +42,99 @@ class PolicyInference:
 
     @torch.inference_mode()
     def predict(self, observation, observation_joint_names=None):
-        """Predict for one manager environment or one named legacy observation."""
+        """Predict action chunks for an unbatched or batched observation."""
+        batched = False
         if self.state_keys == ("proprio",) and "proprio" in observation:
             state = _as_numpy(observation["proprio"], np.float32)
-            if state.ndim == 2:
-                if state.shape[0] != 1:
-                    raise ValueError(f"PolicyInference supports one environment; proprio batch is {state.shape[0]}")
-                state = state[0]
-            if state.ndim != 1 or state.size != self.model.config.state_dim:
+            batched = state.ndim == 2
+            if state.ndim == 1:
+                state = state[None]
+            if state.ndim != 2 or state.shape[1] != self.model.config.state_dim:
                 raise ValueError(
                     f"proprio must have shape [{self.model.config.state_dim}] or "
-                    f"[1,{self.model.config.state_dim}], got {state.shape}"
+                    f"[B,{self.model.config.state_dim}], got {state.shape}"
                 )
         elif self.state_keys == ("proprio",):
             joint_pos = _as_numpy(observation["joint_pos"], np.float32)
-            if joint_pos.ndim == 2:
-                if joint_pos.shape[0] != 1:
-                    raise ValueError(
-                        f"PolicyInference supports one environment; joint_pos batch is {joint_pos.shape[0]}"
-                    )
-                joint_pos = joint_pos[0]
-            joint_pos = joint_pos.reshape(-1)
             eef_pose = _as_numpy(observation["eef_pose_body"], np.float32)
-            if eef_pose.ndim == 3:
-                if eef_pose.shape[0] != 1:
-                    raise ValueError(
-                        f"PolicyInference supports one environment; eef_pose_body batch is {eef_pose.shape[0]}"
-                    )
-                eef_pose = eef_pose[0]
+            batched = joint_pos.ndim == 2 or eef_pose.ndim == 3
+            if joint_pos.ndim == 1:
+                joint_pos = joint_pos[None]
+            if eef_pose.ndim == 2:
+                eef_pose = eef_pose[None]
+            if joint_pos.ndim != 2 or eef_pose.ndim != 3 or joint_pos.shape[0] != eef_pose.shape[0]:
+                raise ValueError(
+                    "joint_pos and eef_pose_body must have matching [B,J] and [B,2,7] batches"
+                )
             if observation_joint_names is None:
-                if joint_pos.size != len(self.controlled_joint_names):
+                if joint_pos.shape[1] != len(self.controlled_joint_names):
                     raise ValueError(
-                        f"joint_pos has {joint_pos.size} values; provide observation_joint_names to map legacy state"
+                        f"joint_pos has {joint_pos.shape[1]} values; provide observation_joint_names to map state"
                     )
                 controlled_indices = tuple(range(len(self.controlled_joint_names)))
             else:
                 names = tuple(observation_joint_names)
-                if len(names) != joint_pos.size or len(set(names)) != len(names):
+                if len(names) != joint_pos.shape[1] or len(set(names)) != len(names):
                     raise ValueError("observation_joint_names must be unique and match the joint state length")
                 missing = set(self.controlled_joint_names).difference(names)
                 if missing:
                     raise ValueError(f"observation_joint_names is missing controlled joints: {sorted(missing)}")
                 controlled_indices = tuple(names.index(name) for name in self.controlled_joint_names)
-            state = compose_task_state(joint_pos, eef_pose, controlled_indices)
+            state = np.stack([
+                compose_task_state(joint_pos[index], eef_pose[index], controlled_indices)
+                for index in range(joint_pos.shape[0])
+            ])
         else:
-            values = []
+            batch_size = None
             for key in self.state_keys:
                 value = _as_numpy(observation[key], np.float32)
                 if key in ("joint_pos", "joint_vel") and value.ndim == 2:
-                    if value.shape[0] != 1:
-                        raise ValueError(f"PolicyInference supports one environment; {key} batch is {value.shape[0]}")
-                    value = value[0]
-                value = value.reshape(-1)
+                    batch_size = value.shape[0]
+                    break
+            if batch_size is None:
+                for name in self.camera_names:
+                    image = _as_numpy(observation[name], np.uint8)
+                    if image.ndim == 4:
+                        batch_size = image.shape[0]
+                        break
+            batched = batch_size is not None
+            batch_size = batch_size or 1
+            values = []
+            for key in self.state_keys:
+                value = _as_numpy(observation[key], np.float32)
+                if not batched:
+                    value = value.reshape(1, -1)
+                elif value.shape[0] == batch_size:
+                    value = value.reshape(batch_size, -1)
+                else:
+                    raise ValueError(f"{key} batch does not match batch size {batch_size}: {value.shape}")
                 if key in ("joint_pos", "joint_vel"):
-                    if observation_joint_names is None and value.size != len(self.controlled_joint_names):
+                    if observation_joint_names is None and value.shape[1] != len(self.controlled_joint_names):
                         raise ValueError(
-                            f"{key} has {value.size} values; provide observation_joint_names "
+                            f"{key} has {value.shape[1]} values; provide observation_joint_names "
                             "to select controlled joints"
                         )
                     if observation_joint_names is not None:
                         names = tuple(observation_joint_names)
-                        if len(names) != value.size or len(set(names)) != len(names):
+                        if len(names) != value.shape[1] or len(set(names)) != len(names):
                             raise ValueError("observation_joint_names must be unique and match the joint state length")
                         missing = set(self.controlled_joint_names).difference(names)
                         if missing:
                             raise ValueError(f"observation_joint_names is missing controlled joints: {sorted(missing)}")
-                        value = value[[names.index(name) for name in self.controlled_joint_names]]
+                        value = value[:, [names.index(name) for name in self.controlled_joint_names]]
                 values.append(value)
-            state = np.concatenate(values)
-        state = torch.from_numpy(self.normalizer.normalize_state(state).astype(np.float32))[None].to(self.device)
+            state = np.concatenate(values, axis=1)
+        state = torch.from_numpy(self.normalizer.normalize_state(state).astype(np.float32)).to(self.device)
         images = {}
         for name in self.camera_names:
             image = _as_numpy(observation[name], np.uint8)
-            if image.ndim == 4:
-                if image.shape[0] != 1:
-                    raise ValueError(f"PolicyInference supports one environment; {name} batch is {image.shape[0]}")
-                image = image[0]
-            if image.ndim != 3 or image.shape[-1] != 3:
-                raise ValueError(f"{name} must have shape [H,W,3] or [1,H,W,3], got {image.shape}")
-            images[name] = torch.from_numpy(image.copy()).permute(2, 0, 1)[None].float().div_(255).to(self.device)
-        normalized = self.model.predict(state, images)[0].cpu().numpy()
-        return self.normalizer.denormalize_action(normalized)
+            if image.ndim == 3:
+                image = image[None]
+            if image.ndim != 4 or image.shape[0] != state.shape[0] or image.shape[-1] != 3:
+                raise ValueError(
+                    f"{name} must have shape [H,W,3] or [B,H,W,3] with B={state.shape[0]}, got {image.shape}"
+                )
+            images[name] = torch.from_numpy(image.copy()).permute(0, 3, 1, 2).float().div_(255).to(self.device)
+        normalized = self.model.predict(state, images).cpu().numpy()
+        actions = self.normalizer.denormalize_action(normalized)
+        return actions if batched else actions[0]

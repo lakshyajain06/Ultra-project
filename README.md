@@ -463,8 +463,8 @@ camera tensors are `[1,H,W,3]`. Unbatched `[22]` and `[H,W,3]` values are
 accepted too. For a legacy observation with named 24-DOF `joint_pos` and
 `eef_pose_body`, call
 `policy.predict(observation, observation_joint_names)` so the same
-metadata-driven selection is applied. Batched deployment with `N > 1` is not
-implemented by this wrapper and raises a clear error.
+metadata-driven selection is applied. Batched manager observations produce
+batched action chunks with shape `[N, chunk_size, 22]`.
 The wrapper currently stages device-backed observations through CPU NumPy
 before normalized inference. This is a simple, reliable integration path, but
 high-throughput vectorized deployment should use an on-device batched adapter
@@ -474,7 +474,7 @@ Evaluate a checkpoint for complete episodes in the manager-based environment:
 
 ```bash
 uv run --locked python scripts/evaluate_policy.py outputs/policy/place_cube/best.pt \
-  --viz none --episodes 10
+  --viz none --episodes 100 --num-envs 16
 ```
 
 Record each episode as a synchronized 2x2 MP4 containing third-person, head,
@@ -493,7 +493,9 @@ in the checkpoint, uses the manager's success/drop/timeout terms, and prints
 one JSON record per episode followed by an aggregate `EVALUATION` record. It
 executes the first action of each predicted chunk by default. Set
 `--chunk-steps N` to execute up to `N` actions open-loop, and use `--max-steps`
-to impose a shorter episode limit for quick checks.
+to impose a shorter episode limit for quick checks. Environments run in
+parallel and are assigned new episode IDs as they finish. With recording
+enabled, each active environment writes its own episode video.
 
 Run the CPU-only synthetic-data tests with:
 

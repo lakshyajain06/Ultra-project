@@ -10,6 +10,7 @@ from isaaclab.app import AppLauncher
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--episodes", type=int, default=10, help="Number of complete episodes to evaluate")
+parser.add_argument("--num-envs", type=int, default=1, help="Number of environments to evaluate in parallel")
 parser.add_argument("--seed", type=int, default=0, help="Manager environment reset seed")
 parser.add_argument(
     "--policy-device",
@@ -42,8 +43,8 @@ args = parser.parse_args()
 
 if not args.checkpoint.is_file():
     parser.error(f"Checkpoint does not exist: {args.checkpoint}")
-if args.episodes <= 0 or args.chunk_steps <= 0:
-    parser.error("--episodes and --chunk-steps must be positive")
+if min(args.episodes, args.num_envs, args.chunk_steps) <= 0:
+    parser.error("--episodes, --num-envs, and --chunk-steps must be positive")
 if args.max_steps is not None and args.max_steps <= 0:
     parser.error("--max-steps must be positive")
 if min(args.camera_width, args.camera_height) <= 0:
@@ -96,46 +97,48 @@ def _policy_observation(observations, env, joint_ids):
     return observation
 
 
-def _outcome(env, terminated, truncated):
+def _outcome(env, env_index, terminated, truncated):
     """Read the individual manager terms before the next environment step."""
-    success = bool(env.termination_manager.get_term("success")[0].item())
-    dropped = bool(env.termination_manager.get_term("cube_dropped")[0].item())
+    success = bool(env.termination_manager.get_term("success")[env_index].item())
+    dropped = bool(env.termination_manager.get_term("cube_dropped")[env_index].item())
     if success:
         return "success"
     if dropped:
         return "cube_dropped"
-    if bool(truncated[0].item()):
+    if bool(truncated[env_index].item()):
         return "timeout"
-    if bool(terminated[0].item()):
+    if bool(terminated[env_index].item()):
         return "terminated"
     raise RuntimeError("Cannot assign an outcome to an unfinished episode")
 
 
-def _rgb(value):
-    """Convert environment zero's HWC RGB output to uint8."""
+def _rgb(value, env_index):
+    """Convert one environment's HWC RGB output to uint8."""
     value = _tensor(value)
     if hasattr(value, "warp"):
         value = value.warp
     if isinstance(value, torch.Tensor):
+        if value.ndim == 4:
+            value = value[env_index]
         value = value.detach().cpu().numpy()
     elif hasattr(value, "numpy"):
         value = value.numpy()
     value = np.asarray(value)
     if value.ndim == 4:
-        value = value[0]
+        value = value[env_index]
     if value.ndim != 3 or value.shape[-1] < 3:
         raise ValueError(f"Camera frame must be HWC RGB or batched HWC RGB, got {value.shape}")
     return np.clip(value[..., :3], 0, 255).astype(np.uint8)
 
 
-def _video_frame(observations, env):
+def _video_frame(observations, env, env_index):
     """Compose third-person, head, left wrist, and right wrist into a 2x2 frame."""
     policy_observation = observations["policy"]
     frames = [
-        _rgb(env.scene["camera"].data.output["rgb"]),
-        _rgb(policy_observation["head_rgb"]),
-        _rgb(policy_observation["left_wrist_rgb"]),
-        _rgb(policy_observation["right_wrist_rgb"]),
+        _rgb(env.scene["camera"].data.output["rgb"], env_index),
+        _rgb(policy_observation["head_rgb"], env_index),
+        _rgb(policy_observation["left_wrist_rgb"], env_index),
+        _rgb(policy_observation["right_wrist_rgb"], env_index),
     ]
     expected = (args.camera_height, args.camera_width, 3)
     if any(frame.shape != expected for frame in frames):
@@ -153,23 +156,26 @@ class EpisodeVideoRecorder:
     def __init__(self, directory, fps):
         self.directory = directory
         self.fps = fps
-        self.writer = None
-        self.path = None
+        self.writers = {}
+        self.paths = {}
 
-    def start(self, episode, observations, env):
+    def start(self, env_index, episode, observations, env):
         self.directory.mkdir(parents=True, exist_ok=True)
-        self.path = self.directory / f"episode_{episode:04d}.mp4"
-        self.writer = imageio.get_writer(self.path, fps=self.fps, codec="libx264")
-        self.append(observations, env)
+        path = self.directory / f"episode_{episode:04d}.mp4"
+        self.paths[env_index] = path
+        self.writers[env_index] = imageio.get_writer(path, fps=self.fps, codec="libx264")
+        self.append(env_index, observations, env)
 
-    def append(self, observations, env):
-        self.writer.append_data(_video_frame(observations, env))
+    def append(self, env_index, observations, env):
+        self.writers[env_index].append_data(_video_frame(observations, env, env_index))
 
-    def close(self):
-        if self.writer is not None:
-            self.writer.close()
-            print(f"Recorded {self.path.resolve()}", flush=True)
-            self.writer = None
+    def close(self, env_index=None):
+        env_indices = list(self.writers) if env_index is None else [env_index]
+        for index in env_indices:
+            writer = self.writers.pop(index, None)
+            if writer is not None:
+                writer.close()
+                print(f"Recorded {self.paths.pop(index).resolve()}", flush=True)
 
 
 def main():
@@ -196,7 +202,7 @@ def main():
         )
     else:
         cfg = UltraCubePlateEnvCfg()
-    cfg.scene.num_envs = 1
+    cfg.scene.num_envs = args.num_envs
     cfg.sim.device = args.device
     if args.record_dir:
         cfg.scene.camera = CameraCfg(
@@ -231,43 +237,68 @@ def main():
         if tuple(joint_names) != ULTRA_CONTROLLED_JOINT_NAMES:
             raise RuntimeError(f"Environment action joint order mismatch: {joint_names}")
 
-        episode_return = 0.0
-        episode_length = 0
+        episode_returns = np.zeros(args.num_envs, dtype=np.float64)
+        episode_lengths = np.zeros(args.num_envs, dtype=np.int64)
+        episode_ids = np.full(args.num_envs, -1, dtype=np.int64)
+        initial_count = min(args.num_envs, args.episodes)
+        episode_ids[:initial_count] = np.arange(initial_count)
+        next_episode_id = initial_count
         if recorder:
-            recorder.start(0, observations, env)
+            for env_index in range(initial_count):
+                recorder.start(env_index, int(episode_ids[env_index]), observations, env)
         while len(results) < args.episodes and app.is_running():
-            chunk = policy.predict(_policy_observation(observations, env, joint_ids))
-            if not np.isfinite(chunk).all():
+            chunks = policy.predict(_policy_observation(observations, env, joint_ids))
+            if chunks.shape[0] != args.num_envs or not np.isfinite(chunks).all():
                 raise RuntimeError("Policy emitted a non-finite action")
-            for action in chunk[: args.chunk_steps]:
-                action_tensor = torch.as_tensor(action, dtype=torch.float32, device=env.device).unsqueeze(0)
+            for chunk_index in range(args.chunk_steps):
+                action_tensor = torch.as_tensor(
+                    chunks[:, chunk_index], dtype=torch.float32, device=env.device,
+                )
                 observations, reward, terminated, truncated, _ = env.step(action_tensor)
-                episode_return += float(reward[0].item())
-                episode_length += 1
+                episode_returns += reward.detach().cpu().numpy()
+                episode_lengths += 1
+                done = (terminated | truncated).detach().cpu().numpy()
 
-                if bool((terminated | truncated)[0].item()):
-                    if recorder:
-                        # Returned observations already belong to the manager's
-                        # automatically reset next episode.
-                        recorder.close()
-                    result = {
-                        "episode": len(results),
-                        "return": episode_return,
-                        "length": episode_length,
-                        "outcome": _outcome(env, terminated, truncated),
-                    }
-                    results.append(result)
-                    print(json.dumps(result), flush=True)
-                    episode_return = 0.0
-                    episode_length = 0
-                    if recorder and len(results) < args.episodes:
-                        recorder.start(len(results), observations, env)
-                    # ManagerBasedRLEnv has already reset this environment.
-                    # Discard the remaining old-state actions and re-plan.
+                if recorder:
+                    for env_index in np.flatnonzero((episode_ids >= 0) & ~done):
+                        recorder.append(int(env_index), observations, env)
+
+                for env_index in np.flatnonzero(done):
+                    env_index = int(env_index)
+                    episode_id = int(episode_ids[env_index])
+                    if episode_id >= 0:
+                        if recorder:
+                            # Returned observations already belong to the
+                            # manager's automatically reset next episode.
+                            recorder.close(env_index)
+                        result = {
+                            "episode": episode_id,
+                            "environment": env_index,
+                            "return": float(episode_returns[env_index]),
+                            "length": int(episode_lengths[env_index]),
+                            "outcome": _outcome(env, env_index, terminated, truncated),
+                        }
+                        results.append(result)
+                        print(json.dumps(result), flush=True)
+                    episode_returns[env_index] = 0.0
+                    episode_lengths[env_index] = 0
+
+                    if next_episode_id < args.episodes:
+                        episode_ids[env_index] = next_episode_id
+                        if recorder:
+                            recorder.start(env_index, next_episode_id, observations, env)
+                        next_episode_id += 1
+                    else:
+                        episode_ids[env_index] = -1
+
+                if np.any(done):
+                    # At least one environment auto-reset. Re-plan the entire
+                    # batch so no reset environment executes a stale chunk.
                     break
 
         if len(results) != args.episodes:
             raise RuntimeError(f"Simulation stopped after {len(results)}/{args.episodes} complete episodes")
+        results.sort(key=lambda result: result["episode"])
         counts = {name: sum(result["outcome"] == name for result in results) for name in (
             "success", "cube_dropped", "timeout", "terminated"
         )}
@@ -282,6 +313,7 @@ def main():
             "mean_length": float(np.mean([result["length"] for result in results])),
             "checkpoint": str(args.checkpoint.resolve()),
             "seed": args.seed,
+            "num_envs": args.num_envs,
             "chunk_steps": args.chunk_steps,
             "record_dir": str(args.record_dir.resolve()) if args.record_dir else None,
         }
