@@ -46,16 +46,6 @@ args.enable_cameras = bool(args.dataset or args.smoke)
 launcher = AppLauncher(args)
 app = launcher.app
 
-if args.headless and not args.smoke:
-    # The headless OpenXR experience deliberately leaves the AR profile off
-    # until every bridge extension has loaded. Enable it now so no desktop XR
-    # panel interaction is required before the Quest client connects.
-    import carb.settings
-
-    carb.settings.get_settings().set_bool("/xr/profile/ar/enabled", True)
-    app.update()
-    print("Headless XR profile started automatically.", flush=True)
-
 import numpy as np
 from scipy.spatial.transform import Rotation
 from data.recording import EpisodeRecorder

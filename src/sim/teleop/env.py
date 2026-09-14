@@ -118,6 +118,15 @@ class UltraTeleopEnv(gym.Env):
             observation[name.removesuffix("_camera") + "_rgb"] = np.asarray(rgb[..., :3], dtype=np.uint8)
         return observation
 
+    def _refresh_cameras(self):
+        """Render reset state before exposing a new episode observation."""
+        if not self.camera_names:
+            return
+        self.sim.forward()
+        self.sim.render()
+        for name in self.camera_names:
+            self.scene[name].update(0.0, force_recompute=True)
+
     def reset(self, *, seed=None, options=None):
         super().reset(seed=seed)
         # Restore followers too, so an episode reset is independent of the last grasp.
@@ -134,6 +143,7 @@ class UltraTeleopEnv(gym.Env):
             obj.write_root_velocity_to_sim_index(root_velocity=as_torch(obj.data.default_root_vel).clone())
         self.scene.reset()
         self.elapsed = 0.0
+        self._refresh_cameras()
         return self.observe(), {}
 
     def restore_initial_state(self, state):
@@ -155,6 +165,7 @@ class UltraTeleopEnv(gym.Env):
             obj.write_root_velocity_to_sim_index(root_velocity=velocity)
         self.scene.reset()
         self.elapsed = 0.0
+        self._refresh_cameras()
         return self.observe()
 
     def ik_action(self, targets_control, grippers, body_target, move_body=False):
