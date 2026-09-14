@@ -486,8 +486,7 @@ uv run --locked python scripts/evaluate_policy.py outputs/policy/place_cube/best
 Recording is enabled by default. Each run creates a timestamped directory such
 as `outputs/evaluation/20260914_153012_-0400` and writes one synchronized 2x2
 MP4 per episode containing third-person, head, left-wrist, and right-wrist
-views. Recordings use H.264 Baseline, YUV 4:2:0, and fast-start metadata for
-VS Code and browser playback. Override the destination when needed:
+views. Override the destination when needed:
 
 ```bash
 uv run --locked python scripts/evaluate_policy.py outputs/policy/place_cube/best.pt \

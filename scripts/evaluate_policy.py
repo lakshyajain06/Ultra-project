@@ -206,7 +206,7 @@ def _video_frame(observations, env, env_index):
 
 
 class EpisodeVideoRecorder:
-    """Write browser-compatible camera mosaics without retaining episodes in memory."""
+    """Write camera mosaics without retaining episodes in memory."""
 
     def __init__(self, directory, fps):
         self.directory = directory
@@ -218,18 +218,7 @@ class EpisodeVideoRecorder:
         self.directory.mkdir(parents=True, exist_ok=True)
         path = self.directory / f"episode_{episode:04d}.mp4"
         self.paths[env_index] = path
-        self.writers[env_index] = imageio.get_writer(
-            path,
-            fps=self.fps,
-            codec="libx264",
-            pixelformat="yuv420p",
-            output_params=[
-                "-profile:v", "baseline",
-                "-crf", "23",
-                "-preset", "fast",
-                "-movflags", "+faststart",
-            ],
-        )
+        self.writers[env_index] = imageio.get_writer(path, fps=self.fps, codec="libx264")
         self.append(env_index, observations, env)
 
     def append(self, env_index, observations, env):
