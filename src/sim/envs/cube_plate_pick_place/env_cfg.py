@@ -12,10 +12,10 @@ from isaaclab.managers import SceneEntityCfg
 from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.utils.configclass import configclass
 
-from sim import ULTRA_CONTROLLED_JOINT_NAMES, UltraTabletopSceneCfg
-from sim.scene_cfg import ROBOT_CAMERA_PATHS, robot_camera_cfg
+from sim import ULTRA_CONTROLLED_JOINT_NAMES
 
 from . import mdp
+from .scene_cfg import ROBOT_CAMERA_PATHS, UltraTabletopSceneCfg, robot_camera_cfg
 
 CAMERA_STREAMS = tuple(ROBOT_CAMERA_PATHS)
 

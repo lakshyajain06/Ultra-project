@@ -34,7 +34,8 @@ import isaaclab.sim as sim_utils
 from isaaclab.scene import InteractiveScene
 from isaaclab.sim import SimulationContext
 
-from sim import UltraJointPositionController, UltraTabletopSceneCfg  # noqa: E402
+from sim import UltraJointPositionController  # noqa: E402
+from sim.envs.cube_plate_pick_place import UltraTabletopSceneCfg  # noqa: E402
 from sim.robots.ultra import as_torch  # noqa: E402
 
 

@@ -2,13 +2,13 @@
 
 import gymnasium as gym
 
-from .env_cfg import CAMERA_STREAMS, UltraCubePlateEnvCfg, configure_cameras
+from .cube_plate_pick_place import CAMERA_STREAMS, UltraCubePlateEnvCfg, configure_cameras
 
 gym.register(
     id="Isaac-Ultra-Cube-Plate-v0",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     disable_env_checker=True,
-    kwargs={"env_cfg_entry_point": f"{__name__}.env_cfg:UltraCubePlateEnvCfg"},
+    kwargs={"env_cfg_entry_point": f"{__name__}.cube_plate_pick_place.env_cfg:UltraCubePlateEnvCfg"},
 )
 
 __all__ = [

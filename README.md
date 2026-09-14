@@ -8,7 +8,7 @@ starting point for a manipulation environment.
 
 ```text
 assets/robots/ultra/ Source-contract metadata (generated USD stays local)
-src/sim/             Isaac Lab scenes, environments, robots, and teleoperation
+src/sim/             Isaac Lab task environments, robots, and teleoperation
 src/data/            Shared demonstration schema, recording, and datasets
 src/learning/        Simulator-independent models, inference, and training
 scripts/             Data collection, training, and evaluation entry points

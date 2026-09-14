@@ -6,7 +6,7 @@ from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sensors import CameraCfg
 from isaaclab.utils.configclass import configclass
 
-from .robots.ultra import ULTRA_CFG
+from ...robots.ultra import ULTRA_CFG
 
 ROBOT_CAMERA_PATHS = {
     "head_rgb": "{ENV_REGEX_NS}/Ultra/Geometry/world/fr30_1/fr30_2/fr30_3/fr30_4/fr30_5/fr30_6/zed_left",

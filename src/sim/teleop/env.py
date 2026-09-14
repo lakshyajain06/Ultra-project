@@ -7,8 +7,8 @@ import isaaclab.sim as sim_utils
 from isaaclab.scene import InteractiveScene
 from isaaclab.sim import SimulationContext
 
-from sim import UltraJointPositionController, UltraTabletopSceneCfg
-from sim.scene_cfg import ROBOT_CAMERA_PATHS, robot_camera_cfg
+from sim import UltraJointPositionController
+from sim.envs.cube_plate_pick_place.scene_cfg import ROBOT_CAMERA_PATHS, UltraTabletopSceneCfg, robot_camera_cfg
 from sim.robots.ultra import as_torch
 from .control import build_task_proprioception, compose_pose, relative_pose, solve_ik
 
