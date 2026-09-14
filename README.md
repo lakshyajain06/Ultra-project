@@ -485,10 +485,9 @@ uv run --locked python scripts/evaluate_policy.py outputs/policy/place_cube/best
 
 Recording is enabled by default. Each run creates a timestamped directory such
 as `outputs/evaluation/20260914_153012_-0400` and writes one synchronized 2x2
-VP9 WebM per episode containing third-person, head, left-wrist, and right-wrist
-views. WebM is used so recordings play in VS Code's Chromium-based preview
-without relying on an optional H.264 codec. Override the destination when
-needed:
+MP4 per episode containing third-person, head, left-wrist, and right-wrist
+views. Recordings use H.264 Baseline, YUV 4:2:0, and fast-start metadata for
+VS Code and browser playback. Override the destination when needed:
 
 ```bash
 uv run --locked python scripts/evaluate_policy.py outputs/policy/place_cube/best.pt \
