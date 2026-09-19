@@ -1,5 +1,7 @@
 """Manager-based RL configurations for Ultra cube-on-plate evaluation."""
 
+import math
+
 import isaaclab.envs.mdp as base_mdp
 import isaaclab.sim as sim_utils
 from isaaclab.envs import ManagerBasedRLEnvCfg
@@ -67,7 +69,11 @@ class ObservationsCfg:
 
 @configclass
 class EventsCfg:
-    reset_all = EventTerm(func=mdp.reset_to_recording_defaults, mode="reset")
+    reset_all = EventTerm(
+        func=mdp.reset_to_recording_defaults,
+        mode="reset",
+        params={"randomize_cube_position": False, "cube_position_range_xy": (0.08, 0.08)},
+    )
 
 
 @configclass
@@ -121,6 +127,8 @@ class UltraCubePlateEnvCfg(ManagerBasedRLEnvCfg):
     enabled_cameras: tuple[str, ...] = ()
     camera_width: int = 320
     camera_height: int = 240
+    randomize_cube_position: bool = False
+    cube_position_range_xy: tuple[float, float] = (0.08, 0.08)
 
     def __post_init__(self):
         self.decimation = 2
@@ -133,6 +141,12 @@ class UltraCubePlateEnvCfg(ManagerBasedRLEnvCfg):
         self.scene.camera = None
         configure_cameras(self, self.enabled_cameras, self.camera_width, self.camera_height)
         self.num_rerenders_on_reset = int(bool(self.enabled_cameras))
+        if len(self.cube_position_range_xy) != 2 or any(
+            not math.isfinite(value) or value < 0 for value in self.cube_position_range_xy
+        ):
+            raise ValueError("cube_position_range_xy must contain two finite nonnegative extents")
+        self.events.reset_all.params["randomize_cube_position"] = self.randomize_cube_position
+        self.events.reset_all.params["cube_position_range_xy"] = tuple(self.cube_position_range_xy)
 
 
 def configure_cameras(

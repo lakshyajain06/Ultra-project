@@ -5,6 +5,7 @@ import argparse
 from contextlib import contextmanager
 from datetime import datetime
 import json
+import math
 import os
 from pathlib import Path
 import sys
@@ -17,14 +18,29 @@ parser.add_argument("--episodes", type=int, default=10, help="Number of complete
 parser.add_argument("--num-envs", type=int, default=1, help="Number of environments to evaluate in parallel")
 parser.add_argument("--seed", type=int, default=0, help="Manager environment reset seed")
 parser.add_argument(
+    "--randomize-cube-position", "--randomize_cube_position", action="store_true",
+    help="Sample the cube's XY position on every reset, matching randomized teleop demonstrations",
+)
+parser.add_argument(
+    "--cube-position-range", "--cube_position_range", nargs=2, type=float, metavar=("X", "Y"),
+    help="Independent cube XY half-ranges in metres (default: 0.08 0.08)",
+)
+parser.add_argument(
     "--policy-device",
     help="Torch device for policy inference (default: the simulation --device)",
 )
 parser.add_argument(
     "--chunk-steps",
     type=int,
-    default=1,
-    help="Actions to execute from each predicted chunk (1 is receding-horizon control)",
+    help="Override inference.chunk.steps; values above 1 select chunk mode for legacy commands",
+)
+parser.add_argument(
+    "--inference", choices=("receding", "chunk", "temporal_ensemble"),
+    help="Hydra inference group (default: checkpoint setting, then training/conf/config.yaml)",
+)
+parser.add_argument(
+    "--temporal-decay", type=float,
+    help="Override inference.temporal_ensemble.decay (larger values favor newer chunks)",
 )
 parser.add_argument(
     "--max-steps",
@@ -47,15 +63,39 @@ parser.add_argument(
 )
 parser.add_argument("--no-record", action="store_true", help="Disable evaluation video recording")
 parser.add_argument("--video-fps", type=int, default=25, help="Frame rate for evaluation videos")
+parser.add_argument(
+    "--replay-dataset", type=Path,
+    help="Use recorded episode actions as the policy, keeping this evaluator and checkpoint's environment setup",
+)
+parser.add_argument("--replay-episode", default="0", help="Episode number or name in --replay-dataset")
 AppLauncher.add_app_launcher_args(parser)
 # Add required positionals after AppLauncher: it probes the partially-built
 # parser while installing its own arguments.
 parser.add_argument("checkpoint", type=Path, help="Policy checkpoint produced by train_policy.py")
 args = parser.parse_args()
 
+from hydra import compose, initialize_config_dir
+from omegaconf import OmegaConf
+
+config_dir = Path(__file__).resolve().parents[1] / "src/learning/training/conf"
+selection = args.inference
+if selection is None and args.chunk_steps is not None:
+    selection = "chunk" if args.chunk_steps > 1 else "receding"
+with initialize_config_dir(config_dir=str(config_dir), version_base=None):
+    config = compose(config_name="config", overrides=[f"inference={selection}"] if selection else [])
+hydra_inference = OmegaConf.to_container(config.inference, resolve=True)
+
 if not args.checkpoint.is_file():
     parser.error(f"Checkpoint does not exist: {args.checkpoint}")
-if min(args.episodes, args.num_envs, args.chunk_steps) <= 0:
+if args.replay_dataset is not None and not args.replay_dataset.is_file():
+    parser.error(f"Replay dataset does not exist: {args.replay_dataset}")
+if args.cube_position_range is not None and not args.randomize_cube_position:
+    parser.error("--cube-position-range requires --randomize-cube-position")
+if args.cube_position_range is None:
+    args.cube_position_range = (0.08, 0.08)
+if any(not math.isfinite(value) or value < 0 for value in args.cube_position_range):
+    parser.error("--cube-position-range values must be finite and nonnegative")
+if min(args.episodes, args.num_envs) <= 0 or (args.chunk_steps is not None and args.chunk_steps <= 0):
     parser.error("--episodes, --num-envs, and --chunk-steps must be positive")
 if args.max_steps <= 0:
     parser.error("--max-steps must be positive")
@@ -114,10 +154,60 @@ def capture_isaac_output():
 # manager environment determines whether RTX camera extensions are required.
 import torch
 
-from learning.inference import PolicyInference
+from learning.inference import PolicyInference, TemporalEnsembler
 
 print(f"Loading checkpoint: {args.checkpoint}", flush=True)
 policy = PolicyInference.from_checkpoint(args.checkpoint, device="cpu")
+inference_settings = (
+    policy.inference_config
+    if selection is None and policy.inference_config is not None
+    else hydra_inference
+)
+inference_method = inference_settings["method"]
+if inference_method not in ("receding", "chunk", "temporal_ensemble"):
+    parser.error(f"Unknown checkpoint inference method: {inference_method!r}")
+if inference_method == "chunk":
+    args.chunk_steps = args.chunk_steps if args.chunk_steps is not None else int(inference_settings["steps"])
+    if args.chunk_steps <= 0:
+        parser.error("inference.chunk.steps must be positive")
+else:
+    if args.chunk_steps not in (None, 1):
+        parser.error("--chunk-steps above 1 requires --inference chunk")
+    args.chunk_steps = 1
+if inference_method == "temporal_ensemble":
+    temporal_decay = (
+        args.temporal_decay if args.temporal_decay is not None else float(inference_settings["decay"])
+    )
+    if not math.isfinite(temporal_decay) or temporal_decay < 0:
+        parser.error("--temporal-decay must be finite and nonnegative")
+elif args.temporal_decay is not None:
+    parser.error("--temporal-decay requires --inference temporal_ensemble")
+else:
+    temporal_decay = None
+if args.replay_dataset is not None:
+    import h5py
+    import numpy as np
+
+    replay_episode = (
+        f"demo_{int(args.replay_episode):06d}" if args.replay_episode.isdigit() else args.replay_episode
+    )
+    with h5py.File(args.replay_dataset, "r") as dataset:
+        if f"data/{replay_episode}" not in dataset:
+            parser.error(f"Episode {replay_episode!r} is not in {args.replay_dataset}")
+        replay_joint_names = tuple(json.loads(dataset.attrs.get("metadata", "{}"))["action_joint_names"])
+        replay_actions = np.asarray(dataset[f"data/{replay_episode}/actions"], dtype=np.float32)
+        replay_initial_images = {
+            name: np.asarray(dataset[f"data/{replay_episode}/obs/{name}"][0], dtype=np.uint8)
+            for name in policy.camera_names
+        }
+    if replay_actions.ndim != 2 or replay_actions.shape[1] != len(policy.controlled_joint_names):
+        parser.error(f"Recorded actions must be [steps, {len(policy.controlled_joint_names)}]")
+    if len(replay_actions) == 0 or not np.isfinite(replay_actions).all():
+        parser.error("Recorded actions must be nonempty and finite")
+    print(
+        f"Using {replay_episode} as a recorded-action policy ({len(replay_actions)} actions); "
+        "observations will be ignored.", flush=True,
+    )
 args.enable_cameras = bool(policy.camera_names or args.record_dir)
 if args.verbose or args.info:
     print("Isaac logs: console", flush=True)
@@ -142,6 +232,29 @@ with capture_isaac_output():
 
 THIRD_PERSON_EYE = (3.5, 5.0, 2.4)
 THIRD_PERSON_TARGET = (0.0, 0.65, 0.80)
+
+
+class RecordedActionPolicy:
+    """Drop-in predict() replacement using an episode's absolute joint targets."""
+
+    def __init__(self, checkpoint_policy, actions, num_envs):
+        self.model = checkpoint_policy.model
+        self.device = checkpoint_policy.device
+        self.camera_names = checkpoint_policy.camera_names
+        self.controlled_joint_names = checkpoint_policy.controlled_joint_names
+        self.actions = actions
+        self.positions = np.zeros(num_envs, dtype=np.int64)
+
+    def predict(self, _observation):
+        offsets = np.arange(self.model.config["chunk_size"], dtype=np.int64)
+        indices = np.minimum(self.positions[:, None] + offsets[None, :], len(self.actions) - 1)
+        return self.actions[indices]
+
+    def advance(self):
+        self.positions += 1
+
+    def reset_env(self, env_index):
+        self.positions[env_index] = 0
 
 
 def _tensor(value):
@@ -236,6 +349,11 @@ class EpisodeVideoRecorder:
 
 
 def main():
+    global policy
+    if args.replay_dataset is not None:
+        if replay_joint_names != tuple(policy.controlled_joint_names):
+            raise ValueError("Recorded action joint order does not match the checkpoint")
+        policy = RecordedActionPolicy(policy, replay_actions, args.num_envs)
     policy_device = args.policy_device or args.device
     policy.device = torch.device(policy_device)
     policy.model.to(policy.device).eval()
@@ -249,12 +367,18 @@ def main():
             f"--chunk-steps={args.chunk_steps} exceeds checkpoint chunk size "
             f"{policy.model.config['chunk_size']}"
         )
+    ensembler = (
+        TemporalEnsembler(args.num_envs, policy.model.config["chunk_size"], temporal_decay)
+        if inference_method == "temporal_ensemble" else None
+    )
 
     recording_cameras = CAMERA_STREAMS if args.record_dir else policy.camera_names
     cfg = UltraCubePlateEnvCfg(
         enabled_cameras=recording_cameras,
         camera_width=args.camera_width,
         camera_height=args.camera_height,
+        randomize_cube_position=args.randomize_cube_position,
+        cube_position_range_xy=tuple(args.cube_position_range),
     )
     cfg.scene.num_envs = args.num_envs
     cfg.scene.env_spacing = args.env_spacing
@@ -293,7 +417,29 @@ def main():
                     origins + np.asarray(THIRD_PERSON_TARGET, dtype=np.float32),
                 )
             observations, _ = env.reset(seed=args.seed)
-        print("Environment ready. Running evaluation...", flush=True)
+            if recording_cameras:
+                # On a cold Isaac Sim startup, the first camera observation can
+                # show the asset's authored pose rather than the reset joint
+                # state. Advance physics once, then reset before episode 0.
+                warmup_robot = env.scene["robot"]
+                warmup_ids, _ = warmup_robot.find_joints(ULTRA_CONTROLLED_JOINT_NAMES, preserve_order=True)
+                warmup_action = _tensor(warmup_robot.data.default_joint_pos)[:, warmup_ids].clone()
+                env.step(warmup_action)
+                observations, _ = env.reset(seed=args.seed)
+        print(
+            f"Environment ready. Running evaluation with {inference_method} inference"
+            + (f" (decay={temporal_decay:g})" if ensembler else f" ({args.chunk_steps} action(s) per chunk)")
+            + "...", flush=True,
+        )
+        if args.replay_dataset is not None and policy.camera_names:
+            image_mae = {
+                name: float(np.mean(np.abs(
+                    _rgb(observations["policy"][name], 0).astype(np.float32)
+                    - replay_initial_images[name].astype(np.float32)
+                )))
+                for name in policy.camera_names
+            }
+            print("RESET_IMAGE_MAE " + json.dumps(image_mae), flush=True)
         robot = env.scene["robot"]
         _, joint_names = robot.find_joints(ULTRA_CONTROLLED_JOINT_NAMES, preserve_order=True)
         if tuple(joint_names) != ULTRA_CONTROLLED_JOINT_NAMES:
@@ -302,6 +448,10 @@ def main():
         episode_returns = np.zeros(args.num_envs, dtype=np.float64)
         episode_lengths = np.zeros(args.num_envs, dtype=np.int64)
         episode_ids = np.full(args.num_envs, -1, dtype=np.int64)
+        cube_start_xy = (
+            _tensor(env.scene["cube"].data.root_pos_w)[:, :2]
+            - _tensor(env.scene.env_origins)[:, :2]
+        ).detach().cpu().numpy().copy()
         initial_count = min(args.num_envs, args.episodes)
         episode_ids[:initial_count] = np.arange(initial_count)
         next_episode_id = initial_count
@@ -312,11 +462,15 @@ def main():
             chunks = policy.predict(_policy_observation(observations))
             if chunks.shape[0] != args.num_envs or not np.isfinite(chunks).all():
                 raise RuntimeError("Policy emitted a non-finite action")
+            if ensembler is not None:
+                chunks = ensembler.add_and_aggregate(chunks)[:, None, :]
             for chunk_index in range(args.chunk_steps):
                 action_tensor = torch.as_tensor(
                     chunks[:, chunk_index], dtype=torch.float32, device=env.device,
                 )
                 observations, reward, terminated, truncated, _ = env.step(action_tensor)
+                if isinstance(policy, RecordedActionPolicy):
+                    policy.advance()
                 episode_returns += reward.detach().cpu().numpy()
                 episode_lengths += 1
                 done = (terminated | truncated).detach().cpu().numpy()
@@ -327,6 +481,10 @@ def main():
 
                 for env_index in np.flatnonzero(done):
                     env_index = int(env_index)
+                    if isinstance(policy, RecordedActionPolicy):
+                        policy.reset_env(env_index)
+                    if ensembler is not None:
+                        ensembler.reset_env(env_index)
                     episode_id = int(episode_ids[env_index])
                     if episode_id >= 0:
                         if recorder:
@@ -340,6 +498,8 @@ def main():
                             "length": int(episode_lengths[env_index]),
                             "outcome": _outcome(env, env_index, terminated, truncated),
                         }
+                        if args.randomize_cube_position:
+                            result["cube_start_xy"] = cube_start_xy[env_index].tolist()
                         results.append(result)
                         print(json.dumps(result), flush=True)
                     episode_returns[env_index] = 0.0
@@ -347,6 +507,10 @@ def main():
 
                     if next_episode_id < args.episodes:
                         episode_ids[env_index] = next_episode_id
+                        cube_start_xy[env_index] = (
+                            _tensor(env.scene["cube"].data.root_pos_w)[env_index, :2]
+                            - _tensor(env.scene.env_origins)[env_index, :2]
+                        ).detach().cpu().numpy()
                         if recorder:
                             recorder.start(env_index, next_episode_id, observations, env)
                         next_episode_id += 1
@@ -374,9 +538,15 @@ def main():
             "mean_return": float(np.mean([result["return"] for result in results])),
             "mean_length": float(np.mean([result["length"] for result in results])),
             "checkpoint": str(args.checkpoint.resolve()),
+            "replay_dataset": str(args.replay_dataset.resolve()) if args.replay_dataset else None,
+            "replay_episode": replay_episode if args.replay_dataset else None,
             "seed": args.seed,
+            "randomize_cube_position": args.randomize_cube_position,
+            "cube_position_range_xy": list(args.cube_position_range) if args.randomize_cube_position else None,
             "num_envs": args.num_envs,
             "chunk_steps": args.chunk_steps,
+            "inference_method": inference_method,
+            "temporal_decay": temporal_decay,
             "record_dir": str(args.record_dir.resolve()) if args.record_dir else None,
         }
         print("EVALUATION " + json.dumps(summary), flush=True)

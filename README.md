@@ -465,9 +465,9 @@ action = action_chunk[0]
 ```
 
 The runtime is deliberately separate from the controller: it emits the same
-ordered absolute torso/arm/jaw targets recorded during teleoperation. Executing
-the chunk (first-action receding horizon, temporal ensembling, or a fixed number
-of open-loop steps) remains an environment/controller policy choice.
+ordered absolute torso/arm/jaw targets recorded during teleoperation. The
+evaluator selects how those chunks are executed through its Hydra `inference`
+config group.
 The manager environment's vision policy dictionary can be passed directly for
 one environment: `proprio` is `[1,22]` in the task-centric order above, and
 camera tensors are `[1,H,W,3]`. Unbatched `[22]` and `[H,W,3]` values are
@@ -500,7 +500,8 @@ uv run --locked python scripts/evaluate_policy.py outputs/policy/place_cube/best
 
 The layout is third-person/head on the top row and left/right wrist on the
 bottom row. Existing episode files are never overwritten. Pass `--no-record`
-for metrics-only evaluation without cameras or videos.
+for metrics-only evaluation without video capture; policy cameras remain enabled
+if the checkpoint requires them.
 
 Parallel evaluation environments are spaced 25 metres apart by default so
 neighboring robot clones do not contaminate the policy or recorded camera
@@ -515,14 +516,48 @@ startup, environment, recording, and episode progress plus result JSON. Pass
 
 The evaluator selects the state or vision environment from the cameras stored
 in the checkpoint, uses the manager's success/drop/timeout terms, and prints
-one JSON record per episode followed by an aggregate `EVALUATION` record. It
-executes the first action of each predicted chunk by default. Set
-`--chunk-steps N` to execute up to `N` actions open-loop. Episodes time out
+one JSON record per episode followed by an aggregate `EVALUATION` record.
+Select execution with the Hydra configs under
+`src/learning/training/conf/inference/`, or override a checkpoint's saved
+setting with `--inference MODE`:
+
+| Mode | Execution |
+| --- | --- |
+| `receding` | Predict every step and execute only the first action. |
+| `chunk` | Predict once, then execute `steps` actions from that prediction without averaging. The default config uses 25 steps. |
+| `temporal_ensemble` | Predict every step and average overlapping predictions for the current action, weighting a prediction by `exp(-decay * age)`; larger decay favors newer chunks. |
+
+New checkpoints retain their Hydra inference setting. Older checkpoints use
+the current default group (`chunk`). `--chunk-steps N` remains a shorthand for
+open-loop chunk execution, and `--temporal-decay N` overrides the ensemble
+weighting. For example:
+
+```bash
+uv run --locked python scripts/evaluate_policy.py outputs/policy/place_cube/best.pt \
+  --inference temporal_ensemble --temporal-decay 0.01 --episodes 10 --headless
+```
+
+Episodes time out
 after 200 policy steps (8 seconds at 25 Hz) by default; override that with
 `--max-steps N`. This default includes margin over the longest successful
 demonstration in `ultra_full.hdf5` (173 steps; success mean 145.2). Environments
 run in parallel and are assigned new episode IDs as they finish. With recording
 enabled, each active environment writes its own episode video.
+
+To evaluate a checkpoint trained on randomized cube starts against the same
+independent uniform ±8 cm XY distribution used by teleoperation, enable reset
+randomization explicitly:
+
+```bash
+uv run --locked python scripts/evaluate_policy.py outputs/training/RUN/best.pt \
+  --inference chunk --randomize-cube-position --cube-position-range 0.08 0.08 \
+  --seed 0 --episodes 10 --headless
+```
+
+Each episode result includes `cube_start_xy` in local scene coordinates. The
+cube's height and orientation, plate pose, and robot reset are unchanged.
+Without `--randomize-cube-position`, evaluation still uses the fixed cube
+start even if the checkpoint was trained on randomized demonstrations.
 
 Run the CPU-only synthetic-data tests with:
 

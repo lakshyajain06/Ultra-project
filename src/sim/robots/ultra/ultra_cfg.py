@@ -52,6 +52,8 @@ ULTRA_CFG = ArticulationCfg(
             "ra_j6": -0.2560,
             "ra_j7": 0.3500,
             ".*_gripper_joint": 0.045,
+            # The passive jaw followers are open in the recorded first frames.
+            "[lr]a_jaw_l_joint": 0.045,
         },
     ),
     actuators={

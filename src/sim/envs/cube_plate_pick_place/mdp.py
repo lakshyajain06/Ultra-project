@@ -76,8 +76,13 @@ def camera_rgb(env: ManagerBasedEnv, sensor_cfg: SceneEntityCfg) -> torch.Tensor
     return rgb.to(dtype=torch.float32)
 
 
-def reset_to_recording_defaults(env: ManagerBasedEnv, env_ids: torch.Tensor) -> None:
-    """Match the teleop reset without teleporting Ultra's authored fixed root."""
+def reset_to_recording_defaults(
+    env: ManagerBasedEnv,
+    env_ids: torch.Tensor,
+    randomize_cube_position: bool = False,
+    cube_position_range_xy: tuple[float, float] = (0.08, 0.08),
+) -> None:
+    """Match the teleop reset, optionally sampling the cube's XY offset."""
     robot = env.scene["robot"]
     joint_pos = _tensor(robot.data.default_joint_pos)[env_ids].clone()
     joint_vel = _tensor(robot.data.default_joint_vel)[env_ids].clone()
@@ -91,6 +96,9 @@ def reset_to_recording_defaults(env: ManagerBasedEnv, env_ids: torch.Tensor) -> 
         obj = env.scene[name]
         root_pose = _tensor(obj.data.default_root_pose)[env_ids].clone()
         root_pose[:, :3] += env.scene.env_origins[env_ids]
+        if name == "cube" and randomize_cube_position:
+            extent = torch.as_tensor(cube_position_range_xy, device=root_pose.device, dtype=root_pose.dtype)
+            root_pose[:, :2] += (2.0 * torch.rand((len(env_ids), 2), device=root_pose.device) - 1.0) * extent
         root_velocity = _tensor(obj.data.default_root_vel)[env_ids].clone()
         obj.write_root_pose_to_sim_index(root_pose=root_pose, env_ids=env_ids)
         obj.write_root_velocity_to_sim_index(root_velocity=root_velocity, env_ids=env_ids)

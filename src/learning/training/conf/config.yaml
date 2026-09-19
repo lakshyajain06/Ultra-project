@@ -1,6 +1,7 @@
 defaults:
   - dataset: ultra
   - model: act
+  - inference: chunk
   - trainer: act
   - train: default
   - wandb: default

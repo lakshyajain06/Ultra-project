@@ -14,11 +14,56 @@ def _as_numpy(value, dtype):
     return np.asarray(value, dtype=dtype)
 
 
+class TemporalEnsembler:
+    """Average the predictions from all chunks covering the current step.
+
+    A new chunk is predicted at every control step. The current action from
+    each overlapping chunk is weighted by ``exp(-decay * age)``, so larger
+    ``decay`` values favor newer predictions. Histories are independent across
+    vectorized environments and must be cleared when an environment resets.
+    """
+
+    def __init__(self, num_envs: int, horizon: int, decay: float = 0.01):
+        if num_envs < 1 or horizon < 1 or not np.isfinite(decay) or decay < 0:
+            raise ValueError("num_envs and horizon must be positive; decay must be finite and nonnegative")
+        self.num_envs = num_envs
+        self.horizon = horizon
+        self.decay = decay
+        self.steps = np.zeros(num_envs, dtype=np.int64)
+        self.history = [[] for _ in range(num_envs)]
+
+    def add_and_aggregate(self, chunks: np.ndarray) -> np.ndarray:
+        """Consume [env, horizon, action] predictions and return [env, action]."""
+        chunks = np.asarray(chunks, dtype=np.float32)
+        if chunks.ndim != 3 or chunks.shape[:2] != (self.num_envs, self.horizon):
+            raise ValueError(f"Expected [{self.num_envs}, {self.horizon}, action] chunks, got {chunks.shape}")
+        if not np.isfinite(chunks).all():
+            raise ValueError("Predicted chunks contain non-finite values")
+        actions = np.empty((self.num_envs, chunks.shape[2]), dtype=np.float32)
+        for env_index in range(self.num_envs):
+            step = int(self.steps[env_index])
+            history = [(start, chunk) for start, chunk in self.history[env_index]
+                       if step - start < self.horizon]
+            history.append((step, chunks[env_index].copy()))
+            ages = np.asarray([step - start for start, _ in history], dtype=np.float32)
+            weights = np.exp(-self.decay * ages)
+            candidates = np.stack([chunk[int(age)] for age, (_, chunk) in zip(ages, history)])
+            actions[env_index] = np.average(candidates, axis=0, weights=weights)
+            self.history[env_index] = history
+            self.steps[env_index] += 1
+        return actions
+
+    def reset_env(self, env_index: int) -> None:
+        self.history[env_index].clear()
+        self.steps[env_index] = 0
+
+
 class PolicyInference:
     """Turn an environment observation into absolute 22-target action chunks."""
 
     def __init__(
-        self, model, normalizer, state_keys, camera_names, controlled_joint_names, model_name, device="cpu"
+        self, model, normalizer, state_keys, camera_names, controlled_joint_names, model_name,
+        device="cpu", inference_config=None,
     ):
         self.model = model.to(device).eval()
         self.model_name = model_name
@@ -27,6 +72,7 @@ class PolicyInference:
         self.camera_names = tuple(camera_names)
         self.controlled_joint_names = tuple(controlled_joint_names)
         self.device = torch.device(device)
+        self.inference_config = dict(inference_config) if inference_config is not None else None
 
     @classmethod
     def from_checkpoint(cls, path, device="cpu"):
@@ -38,6 +84,7 @@ class PolicyInference:
             model, Normalizer.from_dict(payload["normalizer"]),
             dataset_config["state_keys"], dataset_config["camera_names"],
             payload["manifest"]["controlled_joint_names"], model_name, device,
+            payload.get("experiment_config", {}).get("inference"),
         )
 
     @torch.inference_mode()

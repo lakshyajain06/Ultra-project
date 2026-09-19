@@ -12,7 +12,7 @@ import torch
 from torch.utils.data import DataLoader
 
 from data.datasets import build_datasets, compose_task_state
-from learning.inference import PolicyInference
+from learning.inference import PolicyInference, TemporalEnsembler
 from learning.models import ACTPolicy
 from learning.training.act_trainer import ACTTrainer
 from learning.training.tracking import WandbTracker, experiment_config
@@ -78,6 +78,29 @@ class ACTTrainingTests(unittest.TestCase):
         self.assertEqual(config.dataset.camera_names, [])
         self.assertEqual(config.train.batch_size, 8)
         self.assertEqual(config.model.name, "act")
+        self.assertEqual(config.inference.method, "chunk")
+        with initialize_config_dir(config_dir=str(config_dir)):
+            receding = compose(config_name="config", overrides=["inference=receding"])
+            ensemble = compose(config_name="config", overrides=["inference=temporal_ensemble"])
+        self.assertEqual(config.inference.steps, 25)
+        self.assertEqual(receding.inference.method, "receding")
+        self.assertEqual(ensemble.inference.method, "temporal_ensemble")
+        self.assertEqual(ensemble.inference.decay, 0.01)
+
+    def test_temporal_ensemble_overlaps_chunks_and_resets_per_environment(self):
+        ensemble = TemporalEnsembler(num_envs=2, horizon=3, decay=0)
+        first = np.array([[[0], [10], [20]], [[100], [110], [120]]], dtype=np.float32)
+        second = first + 2
+        np.testing.assert_allclose(ensemble.add_and_aggregate(first)[:, 0], [0, 100])
+        np.testing.assert_allclose(ensemble.add_and_aggregate(second)[:, 0], [6, 106])
+        ensemble.reset_env(0)
+        third = np.array([[[5], [15], [25]], [[104], [114], [124]]], dtype=np.float32)
+        np.testing.assert_allclose(ensemble.add_and_aggregate(third)[:, 0], [5, 112])
+        recent_weighted = TemporalEnsembler(num_envs=1, horizon=3, decay=np.log(2))
+        recent_weighted.add_and_aggregate(first[:1])
+        np.testing.assert_allclose(
+            recent_weighted.add_and_aggregate(second[:1])[0, 0], 14 / 3, rtol=1e-6,
+        )
 
     def test_episode_split_normalization_and_padding(self):
         train, validation, normalizer = build_datasets(self.config())
@@ -180,6 +203,7 @@ class ACTTrainingTests(unittest.TestCase):
                 "project": "test", "entity": None, "name": None, "group": None,
                 "tags": [], "mode": "disabled",
             },
+            "inference": {"method": "chunk", "steps": 3},
             "device": "cpu", "output": str(Path(self.temporary.name) / "run"), "resume": None,
         }
         trainer = ACTTrainer(experiment)
@@ -199,6 +223,7 @@ class ACTTrainingTests(unittest.TestCase):
         self.assertEqual(payload["model_name"], "act")
         self.assertEqual(payload["model_config"]["action_dim"], 22)
         runner = PolicyInference.from_checkpoint(checkpoint)
+        self.assertEqual(runner.inference_config, {"method": "chunk", "steps": 3})
         with h5py.File(self.path) as handle:
             demo = handle["data/demo_000000/obs"]
             observation = {"joint_pos": demo["joint_pos"][0], "eef_pose_body": demo["eef_pose_body"][0]}

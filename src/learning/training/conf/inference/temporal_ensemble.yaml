@@ -1,0 +1,5 @@
+# Replan every step and average all overlapping predictions for that step.
+method: temporal_ensemble
+# Weight of a prediction decays as exp(-decay * its age in control steps).
+# Zero gives uniform averaging; larger values favor newer predictions.
+decay: 0.01

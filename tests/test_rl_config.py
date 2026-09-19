@@ -56,6 +56,15 @@ class ManagerBasedRLConfigTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             configure_cameras(cfg, ("overhead_rgb",))
 
+    def test_random_cube_reset_matches_teleop_range(self):
+        cfg = UltraCubePlateEnvCfg(randomize_cube_position=True, cube_position_range_xy=(0.08, 0.04))
+        self.assertEqual(
+            cfg.events.reset_all.params,
+            {"randomize_cube_position": True, "cube_position_range_xy": (0.08, 0.04)},
+        )
+        with self.assertRaises(ValueError):
+            UltraCubePlateEnvCfg(cube_position_range_xy=(-0.01, 0.08))
+
     def test_success_requires_position_height_and_release(self):
         cube = torch.tensor([[0.0, 0.0, 0.85]])
         plate = torch.tensor([[0.0, 0.0, 0.80]])

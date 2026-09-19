@@ -146,10 +146,11 @@ class UltraTabletopSceneCfg(InteractiveSceneCfg):
         init_state=AssetBaseCfg.InitialStateCfg(pos=(0.60, 0.55, 0.36)),
     )
 
+    # Match the typical object heights at the first recorded teleop frame.
     cube = RigidObjectCfg(
         prim_path="{ENV_REGEX_NS}/Cube",
         spawn=sim_utils.CuboidCfg(size=(0.05, 0.05, 0.05), **_dynamic_material((0.10, 0.35, 0.95))),
-        init_state=RigidObjectCfg.InitialStateCfg(pos=(-0.18, 0.12, 0.818)),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=(-0.18, 0.12, 0.806228)),
     )
     plate = RigidObjectCfg(
         prim_path="{ENV_REGEX_NS}/Plate",
@@ -159,5 +160,5 @@ class UltraTabletopSceneCfg(InteractiveSceneCfg):
             axis="Z",
             **_dynamic_material((0.92, 0.92, 0.88)),
         ),
-        init_state=RigidObjectCfg.InitialStateCfg(pos=(0.24, 0.15, 0.793)),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=(0.24, 0.15, 0.7925)),
     )

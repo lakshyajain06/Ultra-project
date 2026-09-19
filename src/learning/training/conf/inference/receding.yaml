@@ -1,0 +1,2 @@
+# Replan every control step and execute only the first predicted action.
+method: receding
