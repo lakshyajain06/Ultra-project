@@ -212,7 +212,7 @@ class PolicyTrainer(ABC):
             np.random.set_state(payload["rng"]["numpy"])
             torch.set_rng_state(payload["rng"]["torch"].cpu())
             if torch.cuda.is_available() and "cuda" in payload["rng"]:
-                torch.cuda.set_rng_state_all(payload["rng"]["cuda"])
+                torch.cuda.set_rng_state_all([state.cpu() for state in payload["rng"]["cuda"]])
         return payload
 
     @staticmethod
