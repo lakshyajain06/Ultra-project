@@ -3,8 +3,9 @@
 import numpy as np
 import torch
 
-from .models import load_model
 from data.datasets import Normalizer, compose_task_state
+
+from .models import load_model
 
 
 def _as_numpy(value, dtype):
@@ -170,7 +171,10 @@ class PolicyInference:
                             raise ValueError(f"observation_joint_names is missing controlled joints: {sorted(missing)}")
                         value = value[:, [names.index(name) for name in self.controlled_joint_names]]
                 values.append(value)
-            state = np.concatenate(values, axis=1)
+            state = (
+                np.concatenate(values, axis=1)
+                if values else np.empty((batch_size, 0), dtype=np.float32)
+            )
         state = torch.from_numpy(self.normalizer.normalize_state(state).astype(np.float32)).to(self.device)
         images = {}
         for name in self.camera_names:

@@ -1,7 +1,7 @@
 """Episode-level splitting and transition windows for Ultra HDF5 data."""
 
-from dataclasses import dataclass
 import json
+from dataclasses import dataclass
 from pathlib import Path
 
 import h5py
@@ -10,6 +10,7 @@ import torch
 from torch.utils.data import Dataset
 
 from .schema import TASK_STATE_NAMES, ULTRA_ACTION_JOINT_NAMES
+
 
 @dataclass(frozen=True)
 class Episode:
@@ -216,7 +217,7 @@ def _state(demo, state_keys, index, controlled_joint_indices):
         if key in ("joint_pos", "joint_vel"):
             value = value[list(controlled_joint_indices)]
         values.append(value)
-    return np.concatenate(values)
+    return np.concatenate(values) if values else np.empty(0, dtype=np.float32)
 
 
 def fit_normalizer(episodes, state_keys, epsilon=1e-6):
@@ -243,7 +244,10 @@ def fit_normalizer(episodes, state_keys, epsilon=1e-6):
                 if key in ("joint_pos", "joint_vel"):
                     value = value[:, list(episode.controlled_joint_indices)]
                 state_parts.append(value)
-            states = np.concatenate(state_parts, axis=1)
+            states = (
+                np.concatenate(state_parts, axis=1)
+                if state_parts else np.empty((episode.length, 0), dtype=np.float64)
+            )
             actions = np.asarray(demo["actions"], dtype=np.float64)
         state_sum = states.sum(0) if state_sum is None else state_sum + states.sum(0)
         state_sq = np.square(states).sum(0) if state_sq is None else state_sq + np.square(states).sum(0)
@@ -305,6 +309,8 @@ def build_datasets(config):
         raise ValueError(f"Invalid dataset config; missing={sorted(missing)}, unexpected={sorted(unexpected)}")
     if config["chunk_size"] <= 0:
         raise ValueError("dataset.chunk_size must be positive")
+    if not config["state_keys"] and not config["camera_names"]:
+        raise ValueError("At least one state key or camera is required")
     episodes = discover_episodes(config)
     train_episodes, validation_episodes = split_episodes(
         episodes, config["validation_fraction"], config["seed"],

@@ -1,23 +1,8 @@
-"""A compact, dependency-light ACT policy for Ultra demonstrations."""
+"""Action Chunking with Transformers policy."""
 
 import torch
+from hydra.utils import instantiate
 from torch import nn
-
-
-class ImageEncoder(nn.Module):
-    """Small CNN suited to the low-resolution dataset cameras."""
-
-    def __init__(self, output_dim):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Conv2d(3, 32, 5, stride=2, padding=2), nn.ReLU(),
-            nn.Conv2d(32, 64, 3, stride=2, padding=1), nn.ReLU(),
-            nn.Conv2d(64, 128, 3, stride=2, padding=1), nn.ReLU(),
-            nn.AdaptiveAvgPool2d((2, 2)), nn.Flatten(), nn.Linear(512, output_dim),
-        )
-
-    def forward(self, image):
-        return self.net(image)
 
 
 class ACTPolicy(nn.Module):
@@ -29,20 +14,38 @@ class ACTPolicy(nn.Module):
 
     def __init__(self, config):
         super().__init__()
+        config = dict(config)
+        # Preserve inference compatibility with checkpoints created before the
+        # encoder choice was stored explicitly.
+        config.setdefault("image_encoder", {
+            "_target_": "learning.models.encoders.CNNImageEncoder",
+        })
         required = {
             "state_dim", "action_dim", "chunk_size", "camera_names", "hidden_dim", "latent_dim",
-            "feedforward_dim", "num_heads", "num_layers", "dropout",
+            "feedforward_dim", "num_heads", "num_layers", "dropout", "image_encoder",
         }
         missing = required.difference(config)
         unexpected = set(config).difference(required)
         if missing or unexpected:
             raise ValueError(f"Invalid ACT config; missing={sorted(missing)}, unexpected={sorted(unexpected)}")
-        self.config = dict(config)
+        self.config = config
         if self.config["chunk_size"] <= 0 or self.config["hidden_dim"] % self.config["num_heads"]:
             raise ValueError("chunk_size must be positive and hidden_dim divisible by num_heads")
+        if self.config["state_dim"] < 0 or (not self.config["state_dim"] and not self.config["camera_names"]):
+            raise ValueError("state_dim must be nonnegative and at least one policy input is required")
         h = self.config["hidden_dim"]
-        self.state_encoder = nn.Sequential(nn.Linear(self.config["state_dim"], h), nn.LayerNorm(h))
-        self.image_encoders = nn.ModuleDict({name: ImageEncoder(h) for name in self.config["camera_names"]})
+        self.state_encoder = (
+            nn.Sequential(nn.Linear(self.config["state_dim"], h), nn.LayerNorm(h))
+            if self.config["state_dim"] else None
+        )
+        self.image_encoders = nn.ModuleDict({
+            name: instantiate(
+                self.config["image_encoder"],
+                output_dim=h,
+                _execution_whitelist_="learning.models.encoders.*",
+            )
+            for name in self.config["camera_names"]
+        })
         self.camera_embeddings = nn.Parameter(torch.empty(len(self.config["camera_names"]), h))
         self.latent_encoder = nn.Sequential(
             nn.Linear(
@@ -73,25 +76,36 @@ class ACTPolicy(nn.Module):
         missing = set(self.config["camera_names"]).difference(images)
         if missing:
             raise KeyError(f"Missing configured cameras: {sorted(missing)}")
-        memory = [self.state_encoder(state)]
-        for index, name in enumerate(self.config["camera_names"]):
-            memory.append(self.image_encoders[name](images[name]) + self.camera_embeddings[index])
-        mu = logvar = None
-        if actions is not None:
-            expected = (state.shape[0], self.config["chunk_size"], self.config["action_dim"])
-            if tuple(actions.shape) != expected:
-                raise ValueError(f"Expected actions {expected}, got {tuple(actions.shape)}")
-            if is_pad is None or tuple(is_pad.shape) != expected[:2]:
-                raise ValueError(f"Expected is_pad {expected[:2]} with training actions")
-            posterior = torch.cat((state, actions.flatten(1), is_pad.to(state.dtype)), dim=-1)
-            mu, logvar = self.latent_encoder(posterior).chunk(2, dim=-1)
-            latent = mu + torch.randn_like(mu) * torch.exp(0.5 * logvar)
-        else:
-            latent = state.new_zeros((state.shape[0], self.config["latent_dim"]))
+        memory = self._encode_observations(state, images)
+        latent, mu, logvar = self._encode_latent(state, actions, is_pad)
         memory.append(self.latent_project(latent))
         memory = torch.stack(memory, dim=1)
         queries = self.action_queries.unsqueeze(0).expand(state.shape[0], -1, -1)
         return self.action_head(self.decoder(queries, memory)), mu, logvar
+
+    def _encode_observations(self, state, images):
+        """Build the state and camera memory tokens consumed by ACT."""
+        memory = [self.state_encoder(state)] if self.state_encoder is not None else []
+        for index, name in enumerate(self.config["camera_names"]):
+            image_token = self.image_encoders[name](images[name])
+            memory.append(image_token + self.camera_embeddings[index])
+        return memory
+
+    def _encode_latent(self, state, actions, is_pad):
+        """Sample the training posterior or return the inference-time prior."""
+        if actions is None:
+            latent = state.new_zeros((state.shape[0], self.config["latent_dim"]))
+            return latent, None, None
+
+        expected = (state.shape[0], self.config["chunk_size"], self.config["action_dim"])
+        if tuple(actions.shape) != expected:
+            raise ValueError(f"Expected actions {expected}, got {tuple(actions.shape)}")
+        if is_pad is None or tuple(is_pad.shape) != expected[:2]:
+            raise ValueError(f"Expected is_pad {expected[:2]} with training actions")
+        posterior = torch.cat((state, actions.flatten(1), is_pad.to(state.dtype)), dim=-1)
+        mu, logvar = self.latent_encoder(posterior).chunk(2, dim=-1)
+        latent = mu + torch.randn_like(mu) * torch.exp(0.5 * logvar)
+        return latent, mu, logvar
 
     @torch.no_grad()
     def predict(self, state, images=None):

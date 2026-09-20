@@ -1,0 +1,4 @@
+# Torchvision ResNet image encoder. Set weights=DEFAULT for ImageNet initialization.
+_target_: learning.models.encoders.ResNetImageEncoder
+variant: resnet18
+weights: null

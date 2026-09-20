@@ -370,7 +370,7 @@ positions from legacy 24-DOF recordings and combines them with
 `obs/eef_pose_body`; the two passive jaw followers are never included.
 State and action statistics are fitted on the training episodes only and stored
 inside every checkpoint. Training uses one Hydra YAML configuration with
-`dataset`, `model`, `train`, and `wandb` sections; command-line values use
+`dataset`, `encoder`, `model`, `train`, and `wandb` sections; command-line values use
 Hydra's `section.key=value` override syntax.
 
 Train on one or more collections:
@@ -396,13 +396,20 @@ validation sets. Use `train.seed`, `dataset.validation_fraction`,
 legacy 44D controlled q/qdot state remains available with
 `dataset.state_keys=[joint_pos,joint_vel]`. Cameras can be removed independently,
 including all of them (`dataset.camera_names=[]`), without changing the dataset
-format. Run with `--help` to inspect the fully composed configuration tree.
+format. For a vision-only policy, remove proprioception with
+`dataset.state_keys=[]`; at least one camera must remain enabled. Run with
+`--help` to inspect the fully composed configuration tree.
 Configuration files live under `src/learning/training/conf`; Hydra groups make
 presets composable, for example
 `model=act trainer=act train=debug wandb=offline`. Model
 parameters are overridden below the selected model, such as
 `model.parameters.hidden_dim=128`; ACT's KL weight is similarly configured as
-`model.training.kl_weight`. Dataset and model implementations validate their
+`model.training.kl_weight`. The default `encoder=cnn` is the compact camera
+encoder used by existing checkpoints. Select `encoder=resnet` for a
+torchvision ResNet-18, override its depth with `encoder.variant=resnet34` or
+`encoder.variant=resnet50`, and use `encoder.weights=DEFAULT` to start from
+ImageNet weights. Each configured camera gets its own encoder instance. Dataset,
+encoder, and model implementations validate their
 resolved YAML mappings when they construct runtime objects.
 Adding another policy family requires its model and trainer implementations,
 matching Hydra files under `training/conf/model` and `training/conf/trainer`,

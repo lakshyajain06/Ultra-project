@@ -1,22 +1,22 @@
 """CPU-only ACT pipeline tests with tiny synthetic HDF5 demonstrations."""
 
 import json
-from pathlib import Path
 import tempfile
 import unittest
+from pathlib import Path
 
 import h5py
-from hydra import compose, initialize_config_dir
 import numpy as np
 import torch
+from hydra import compose, initialize_config_dir
 from torch.utils.data import DataLoader
 
 from data.datasets import build_datasets, compose_task_state
 from learning.inference import PolicyInference, TemporalEnsembler
 from learning.models import ACTPolicy
+from learning.models.encoders import CNNImageEncoder, ResNetImageEncoder
 from learning.training.act_trainer import ACTTrainer
 from learning.training.tracking import WandbTracker, experiment_config
-
 
 CAMERAS = ("head_rgb", "left_wrist_rgb", "right_wrist_rgb")
 
@@ -59,10 +59,10 @@ class ACTTrainingTests(unittest.TestCase):
         self.temporary.cleanup()
 
     def config(self, **overrides):
-        values = dict(
-            paths=[str(self.path)], episode_keys=[], chunk_size=3, state_keys=["proprio"],
-            camera_names=list(CAMERAS), statuses=["success"], validation_fraction=0.5, seed=7,
-        )
+        values = {
+            "paths": [str(self.path)], "episode_keys": [], "chunk_size": 3, "state_keys": ["proprio"],
+            "camera_names": list(CAMERAS), "statuses": ["success"], "validation_fraction": 0.5, "seed": 7,
+        }
         values.update(overrides)
         return values
 
@@ -78,14 +78,33 @@ class ACTTrainingTests(unittest.TestCase):
         self.assertEqual(config.dataset.camera_names, [])
         self.assertEqual(config.train.batch_size, 8)
         self.assertEqual(config.model.name, "act")
+        self.assertEqual(
+            config.model.parameters.image_encoder._target_,
+            "learning.models.encoders.CNNImageEncoder",
+        )
         self.assertEqual(config.inference.method, "chunk")
         with initialize_config_dir(config_dir=str(config_dir)):
             receding = compose(config_name="config", overrides=["inference=receding"])
             ensemble = compose(config_name="config", overrides=["inference=temporal_ensemble"])
+            resnet = compose(config_name="config", overrides=["encoder=resnet"])
         self.assertEqual(config.inference.steps, 25)
         self.assertEqual(receding.inference.method, "receding")
         self.assertEqual(ensemble.inference.method, "temporal_ensemble")
         self.assertEqual(ensemble.inference.decay, 0.01)
+        self.assertEqual(
+            resnet.model.parameters.image_encoder._target_,
+            "learning.models.encoders.ResNetImageEncoder",
+        )
+        self.assertEqual(resnet.model.parameters.image_encoder.variant, "resnet18")
+
+    def test_image_encoders_share_a_policy_token_contract(self):
+        images = torch.rand(2, 3, 32, 32)
+        cnn = CNNImageEncoder(output_dim=16)
+        resnet = ResNetImageEncoder(output_dim=16, variant="resnet18").eval()
+        self.assertIsInstance(cnn, CNNImageEncoder)
+        self.assertIsInstance(resnet, ResNetImageEncoder)
+        self.assertEqual(cnn(images).shape, (2, 16))
+        self.assertEqual(resnet(images).shape, (2, 16))
 
     def test_temporal_ensemble_overlaps_chunks_and_resets_per_environment(self):
         ensemble = TemporalEnsembler(num_envs=2, horizon=3, decay=0)
@@ -105,7 +124,7 @@ class ACTTrainingTests(unittest.TestCase):
     def test_episode_split_normalization_and_padding(self):
         train, validation, normalizer = build_datasets(self.config())
         self.assertEqual((len(train.episodes), len(validation.episodes)), (1, 1))
-        self.assertTrue(set(e.identity for e in train.episodes).isdisjoint(e.identity for e in validation.episodes))
+        self.assertTrue({e.identity for e in train.episodes}.isdisjoint(e.identity for e in validation.episodes))
         self.assertEqual(normalizer.state_mean.shape, (22,))
         sample = train[len(train) - 1]
         self.assertEqual(sample["actions"].shape, (3, 22))
@@ -180,8 +199,30 @@ class ACTTrainingTests(unittest.TestCase):
             "num_heads": 2, "num_layers": 1, "dropout": 0,
         })
         prediction = model.predict(sample["state"][None], {})
+        self.assertEqual(
+            model.config["image_encoder"],
+            {"_target_": "learning.models.encoders.CNNImageEncoder"},
+        )
         self.assertEqual(prediction.shape, (1, 3, 22))
         self.assertEqual(normalizer.action_mean.shape, (22,))
+
+    def test_proprioception_can_be_disabled_for_an_image_only_policy(self):
+        train, _, normalizer = build_datasets(self.config(state_keys=(), validation_fraction=0))
+        sample = train[0]
+        self.assertEqual(sample["state"].shape, (0,))
+        self.assertEqual(normalizer.state_mean.shape, (0,))
+        model = ACTPolicy({
+            "state_dim": 0, "action_dim": 22, "chunk_size": 3, "camera_names": list(CAMERAS),
+            "hidden_dim": 16, "latent_dim": 2, "feedforward_dim": 32,
+            "num_heads": 2, "num_layers": 1, "dropout": 0,
+        })
+        prediction = model.predict(sample["state"][None], {
+            name: image[None] for name, image in sample["images"].items()
+        })
+        self.assertEqual(prediction.shape, (1, 3, 22))
+
+        with self.assertRaisesRegex(ValueError, "At least one state key or camera"):
+            build_datasets(self.config(state_keys=(), camera_names=(), validation_fraction=0))
 
     def test_forward_train_checkpoint_and_inference(self):
         config = self.config(validation_fraction=0)

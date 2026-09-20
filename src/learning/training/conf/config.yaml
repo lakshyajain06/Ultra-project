@@ -1,5 +1,6 @@
 defaults:
   - dataset: ultra
+  - encoder: cnn
   - model: act
   - inference: chunk
   - trainer: act

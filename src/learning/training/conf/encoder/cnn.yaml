@@ -1,0 +1,2 @@
+# Compact encoder for low-resolution robot cameras.
+_target_: learning.models.encoders.CNNImageEncoder

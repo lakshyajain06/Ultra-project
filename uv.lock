@@ -3287,6 +3287,7 @@ dependencies = [
     { name = "isaaclab", extra = ["isaacsim"] },
     { name = "python-dotenv" },
     { name = "scipy" },
+    { name = "torchvision" },
     { name = "wandb" },
 ]
 
@@ -3303,6 +3304,7 @@ requires-dist = [
     { name = "isaacteleop", extras = ["cloudxr"], marker = "platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'teleop'", specifier = "==1.4.142" },
     { name = "python-dotenv", specifier = ">=1.1,<2" },
     { name = "scipy", specifier = ">=1.15,<2" },
+    { name = "torchvision", specifier = ">=0.22,<1" },
     { name = "wandb", specifier = ">=0.21,<1" },
 ]
 provides-extras = ["teleop"]
