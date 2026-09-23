@@ -15,3 +15,17 @@ TASK_STATE_NAMES = (
     *(f"right_eef_body_{name}" for name in ("x", "y", "z", "qx", "qy", "qz", "qw")),
     "right_gripper_opening",
 )
+
+DUAL_ULTRA_ACTION_JOINT_NAMES = (
+    *(f"robot_left/ra_j{i}" for i in range(1, 8)),
+    "robot_left/ra_gripper_joint",
+    *(f"robot_right/la_j{i}" for i in range(1, 8)),
+    "robot_right/la_gripper_joint",
+)
+
+DUAL_TASK_STATE_NAMES = (
+    *(f"robot_left/eef_body_{name}" for name in ("x", "y", "z", "qx", "qy", "qz", "qw")),
+    "robot_left/gripper_opening",
+    *(f"robot_right/eef_body_{name}" for name in ("x", "y", "z", "qx", "qy", "qz", "qw")),
+    "robot_right/gripper_opening",
+)

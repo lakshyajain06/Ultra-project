@@ -46,3 +46,29 @@ def test_annotation_updates_hdf5_and_preserves_original_status():
             assert not bool(attrs["success"])
             assert attrs["annotation_notes"] == "Bad camera view"
             assert attrs["annotated_utc"]
+
+
+def test_dual_ultra_camera_streams_are_discovered_and_encoded():
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "dual_episodes.hdf5"
+        camera_names = (
+            "task_rgb", "left_controlled_wrist_rgb", "right_controlled_wrist_rgb",
+        )
+        with h5py.File(path, "w") as handle:
+            handle.attrs["metadata"] = json.dumps({
+                "task": "dual_ultra_handover",
+                "control_hz": 25,
+                "camera_streams": list(camera_names),
+            })
+            demo = handle.create_group("data/demo_000000")
+            demo.attrs["status"] = "success"
+            demo.create_dataset("actions", data=np.zeros((2, 16), dtype=np.float32))
+            for camera in camera_names:
+                demo.create_dataset(f"obs/{camera}", data=np.zeros((2, 4, 6, 3), dtype=np.uint8))
+
+        annotator = MODULE.Annotator(path)
+        episode = annotator.summary()["episodes"][0]
+        assert episode["cameras"] == list(camera_names)
+        if shutil.which("ffmpeg"):
+            loaded = annotator.load_episode("demo_000000")
+            assert loaded["video_bytes"] > 0

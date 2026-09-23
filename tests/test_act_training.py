@@ -11,7 +11,8 @@ import torch
 from hydra import compose, initialize_config_dir
 from torch.utils.data import DataLoader
 
-from data.datasets import build_datasets, compose_task_state
+from data.datasets import build_datasets, compose_task_state, dataset_manifest
+from data.schema import DUAL_TASK_STATE_NAMES, DUAL_ULTRA_ACTION_JOINT_NAMES
 from learning.inference import PolicyInference, TemporalEnsembler
 from learning.models import ACTPolicy
 from learning.models.encoders import CNNImageEncoder, ResNetImageEncoder
@@ -47,6 +48,28 @@ def make_dataset(path):
             obs.create_dataset("eef_pose_body", data=eef)
             for camera_index, camera in enumerate(CAMERAS):
                 obs.create_dataset(camera, data=np.full((length, 12, 16, 3), 20 * camera_index, np.uint8))
+
+
+def make_dual_dataset(path):
+    action_names = list(DUAL_ULTRA_ACTION_JOINT_NAMES)
+    observation_names = []
+    for robot in ("robot_left", "robot_right"):
+        robot_actions = [name for name in action_names if name.startswith(f"{robot}/")]
+        observation_names.extend([*robot_actions, f"{robot}/la_jaw_l_joint", f"{robot}/ra_jaw_l_joint"])
+    with h5py.File(path, "w") as handle:
+        handle.attrs["schema_version"] = 7
+        handle.attrs["metadata"] = json.dumps({
+            "action_joint_names": action_names,
+            "observation_joint_names": observation_names,
+            "proprio_layout": list(DUAL_TASK_STATE_NAMES),
+        })
+        demo = handle.create_group("data/demo_000000")
+        demo.attrs["status"] = "success"
+        demo.attrs["success"] = True
+        demo.create_dataset("actions", data=np.zeros((3, 16), dtype=np.float32))
+        obs = demo.create_group("obs")
+        obs.create_dataset("proprio", data=np.zeros((3, 16), dtype=np.float32))
+        obs.create_dataset("task_rgb", data=np.zeros((3, 12, 16, 3), dtype=np.uint8))
 
 
 class ACTTrainingTests(unittest.TestCase):
@@ -145,6 +168,21 @@ class ACTTrainingTests(unittest.TestCase):
         ))
         self.assertEqual(legacy[0]["state"].shape, (44,))
         self.assertEqual(legacy_normalizer.state_mean.shape, (44,))
+
+    def test_dual_robot_schema_builds_16d_training_contract(self):
+        path = Path(self.temporary.name) / "dual.hdf5"
+        make_dual_dataset(path)
+        config = self.config(
+            paths=[str(path)], camera_names=["task_rgb"], validation_fraction=0,
+        )
+        train, validation, normalizer = build_datasets(config)
+        self.assertEqual(validation.episodes, [])
+        self.assertEqual(normalizer.state_mean.shape, (16,))
+        self.assertEqual(normalizer.action_mean.shape, (16,))
+        self.assertEqual(train[0]["actions"].shape, (3, 16))
+        manifest = dataset_manifest(config, train, validation)
+        self.assertEqual(manifest["controlled_joint_names"], list(DUAL_ULTRA_ACTION_JOINT_NAMES))
+        self.assertEqual(manifest["state_layout"], list(DUAL_TASK_STATE_NAMES))
 
     def test_status_error_explains_available_labels(self):
         with self.assertRaisesRegex(ValueError, "found statuses=.*aborted.*success"):

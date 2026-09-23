@@ -16,14 +16,18 @@ def _storage_kwargs(key):
 
 
 class EpisodeRecorder:
-    def __init__(self, path, metadata):
+    def __init__(self, path, metadata, *, schema_version=6):
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         self.file = h5py.File(path, "x")  # Never replace an existing dataset.
-        # Version 6 adds the canonical 22-D ``obs/proprio`` stream while
-        # retaining the raw state fields needed by replay and older tools.
-        self.file.attrs["schema_version"] = 6
+        # Version 6 is the single-Ultra contract; version 7 generalizes the
+        # same incremental format to the namespaced dual-Ultra contract.
+        if schema_version not in (6, 7):
+            raise ValueError("EpisodeRecorder supports schema versions 6 and 7")
+        self.file.attrs["schema_version"] = schema_version
         metadata = dict(metadata)
         metadata.setdefault("proprio_layout", list(TASK_STATE_NAMES))
+        self.proprio_dim = len(metadata["proprio_layout"])
+        self.action_dim = len(metadata.get("action_joint_names", ())) or None
         self.file.attrs["metadata"] = json.dumps(metadata)
         self.data = self.file.create_group("data")
         self.episode = None
@@ -42,6 +46,9 @@ class EpisodeRecorder:
     def append(self, obs, action, next_obs, packet, targets, wall_time, sim_time, controller_rotation_offsets=None):
         self._validate_proprio(obs, "obs")
         self._validate_proprio(next_obs, "next_obs")
+        action = np.asarray(action)
+        if self.action_dim is not None and action.shape != (self.action_dim,):
+            raise ValueError(f"action must contain {self.action_dim} values; got {action.shape}")
         values = {"actions": action, "quest": packet, "eef_targets": targets,
                   "wall_time": wall_time, "sim_time": sim_time}
         if controller_rotation_offsets is not None:
@@ -59,13 +66,14 @@ class EpisodeRecorder:
         # Flush each transition: a process crash leaves an explicitly incomplete attempt.
         self.file.flush()
 
-    @staticmethod
-    def _validate_proprio(values, label):
+    def _validate_proprio(self, values, label):
         if "proprio" not in values:
-            raise KeyError(f"{label} must contain canonical 22-D proprio")
+            raise KeyError(f"{label} must contain canonical proprio")
         proprio = np.asarray(values["proprio"])
-        if proprio.shape != (22,) or not np.isfinite(proprio).all():
-            raise ValueError(f"{label}/proprio must be 22 finite values; got {proprio.shape}")
+        if proprio.shape != (self.proprio_dim,) or not np.isfinite(proprio).all():
+            raise ValueError(
+                f"{label}/proprio must be {self.proprio_dim} finite values; got {proprio.shape}"
+            )
 
     def finish(self, status):
         if self.episode is not None:

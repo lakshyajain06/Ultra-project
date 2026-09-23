@@ -26,6 +26,10 @@ class PolicyTrainer(ABC):
         self._seed_everything(config["train"]["seed"])
         self.train_data, self.validation_data, self.normalizer = build_datasets(config["dataset"])
         self.manifest = dataset_manifest(config["dataset"], self.train_data, self.validation_data)
+        self.jaw_indices = tuple(
+            index for index, name in enumerate(self.manifest["controlled_joint_names"])
+            if name.endswith("gripper_joint")
+        )
         model = dict(config["model"])
         self.model_name = model.pop("name")
         model_parameters = dict(model.pop("parameters", {}))
@@ -150,9 +154,10 @@ class PolicyTrainer(ABC):
         normalized_mae = difference.masked_select(valid.expand_as(difference)).mean()
         physical_difference = difference * self.action_std.view(1, 1, -1)
         physical_mae = physical_difference.masked_select(valid.expand_as(difference)).mean()
-        jaw_indices = torch.tensor([13, 21], device=prediction.device)
+        jaw_indices = torch.tensor(self.jaw_indices, device=prediction.device)
         joint_indices = torch.tensor(
-            [index for index in range(prediction.shape[-1]) if index not in (13, 21)], device=prediction.device,
+            [index for index in range(prediction.shape[-1]) if index not in self.jaw_indices],
+            device=prediction.device,
         )
         joint_mae = physical_difference.index_select(-1, joint_indices).masked_select(
             valid.expand(*valid.shape[:-1], joint_indices.numel())

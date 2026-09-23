@@ -9,7 +9,12 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from .schema import TASK_STATE_NAMES, ULTRA_ACTION_JOINT_NAMES
+from .schema import (
+    DUAL_TASK_STATE_NAMES,
+    DUAL_ULTRA_ACTION_JOINT_NAMES,
+    TASK_STATE_NAMES,
+    ULTRA_ACTION_JOINT_NAMES,
+)
 
 
 @dataclass(frozen=True)
@@ -19,6 +24,8 @@ class Episode:
     length: int
     status: str
     controlled_joint_indices: tuple[int, ...]
+    controlled_joint_names: tuple[str, ...]
+    proprio_layout: tuple[str, ...]
 
     @property
     def identity(self):
@@ -60,6 +67,7 @@ def discover_episodes(config):
     requested_keys = {key.removeprefix("data/") for key in config["episode_keys"]}
     matched_keys = {key: [] for key in requested_keys}
     expected_shapes = None
+    expected_contract = None
     for filename in config["paths"]:
         path = str(Path(filename).expanduser().resolve())
         if path in seen_paths:
@@ -67,15 +75,28 @@ def discover_episodes(config):
         seen_paths.add(path)
         with h5py.File(path, "r") as handle:
             schema_version = int(handle.attrs.get("schema_version", -1))
-            if schema_version not in (4, 5, 6):
-                raise ValueError(f"{path} uses unsupported schema_version={schema_version}; expected 4, 5, or 6")
+            if schema_version not in (4, 5, 6, 7):
+                raise ValueError(f"{path} uses unsupported schema_version={schema_version}; expected 4 through 7")
             try:
                 metadata = json.loads(handle.attrs["metadata"])
             except (KeyError, TypeError, json.JSONDecodeError) as error:
                 raise ValueError(f"{path} has missing or invalid JSON metadata") from error
             action_names = tuple(metadata.get("action_joint_names", ()))
-            if action_names != ULTRA_ACTION_JOINT_NAMES:
-                raise ValueError(f"{path} action_joint_names do not match the canonical Ultra target order")
+            expected_action_names = (
+                DUAL_ULTRA_ACTION_JOINT_NAMES if schema_version == 7 else ULTRA_ACTION_JOINT_NAMES
+            )
+            if action_names != expected_action_names:
+                raise ValueError(f"{path} action_joint_names do not match its canonical target order")
+            proprio_layout = tuple(metadata.get("proprio_layout", ()))
+            expected_proprio_layout = DUAL_TASK_STATE_NAMES if schema_version == 7 else TASK_STATE_NAMES
+            if proprio_layout and proprio_layout != expected_proprio_layout:
+                raise ValueError(f"{path} proprio_layout does not match its canonical state order")
+            proprio_layout = proprio_layout or expected_proprio_layout
+            contract = (action_names, proprio_layout)
+            if expected_contract is None:
+                expected_contract = contract
+            elif contract != expected_contract:
+                raise ValueError("Selected dataset files mix incompatible single- and dual-robot contracts")
             observation_names = tuple(metadata.get("observation_joint_names", ()))
             if not observation_names:
                 raise ValueError(f"{path} metadata has no observation_joint_names")
@@ -96,15 +117,17 @@ def discover_episodes(config):
                 seen_statuses.add(status)
                 length = len(demo.get("actions", ()))
                 if status in config["statuses"] and length:
-                    if demo["actions"].ndim != 2 or demo["actions"].shape[1] != 22:
+                    if demo["actions"].ndim != 2 or demo["actions"].shape[1] != len(action_names):
                         raise ValueError(
-                            f"{path}::{key}/actions must be [T,22] absolute Ultra targets; "
+                            f"{path}::{key}/actions must be [T,{len(action_names)}] absolute targets; "
                             f"got {demo['actions'].shape}"
                         )
                     state_datasets = []
                     for name in config["state_keys"]:
                         if name == "proprio":
-                            state_datasets.extend(("proprio",) if "obs/proprio" in demo else ("joint_pos", "eef_pose_body"))
+                            state_datasets.extend(
+                                ("proprio",) if "obs/proprio" in demo else ("joint_pos", "eef_pose_body")
+                            )
                         else:
                             state_datasets.append(name)
                     required = [f"obs/{k}" for k in dict.fromkeys((*state_datasets, *config["camera_names"]))]
@@ -124,13 +147,16 @@ def discover_episodes(config):
                     if "proprio" in config["state_keys"]:
                         if "obs/proprio" in demo:
                             proprio_shape = demo["obs/proprio"].shape
-                            if proprio_shape != (length, len(TASK_STATE_NAMES)):
+                            if proprio_shape != (length, len(proprio_layout)):
                                 raise ValueError(
-                                    f"{path}::{key}/obs/proprio must be [T,22]; got {proprio_shape}"
+                                    f"{path}::{key}/obs/proprio must be [T,{len(proprio_layout)}]; "
+                                    f"got {proprio_shape}"
                                 )
                             if not np.isfinite(demo["obs/proprio"][...]).all():
                                 raise ValueError(f"{path}::{key}/obs/proprio contains non-finite values")
                         else:
+                            if schema_version == 7:
+                                raise KeyError(f"{path}::{key} schema-7 data must contain obs/proprio")
                             joint_shape = demo["obs/joint_pos"].shape
                             eef_shape = demo["obs/eef_pose_body"].shape
                             if len(joint_shape) != 2 or joint_shape[1] != len(observation_names):
@@ -147,7 +173,7 @@ def discover_episodes(config):
                         if len(shape) != 4 or shape[-1] != 3 or demo[f"obs/{name}"].dtype != np.uint8:
                             raise ValueError(f"{path}::{key}/obs/{name} must be uint8 [T,H,W,3]; got {shape}")
                     shapes = tuple(
-                        (len(TASK_STATE_NAMES),) if name == "proprio"
+                        (len(proprio_layout),) if name == "proprio"
                         else (len(action_names),) if name in ("joint_pos", "joint_vel")
                         else demo[f"obs/{name}"].shape[1:]
                         for name in (*config["state_keys"], *config["camera_names"])
@@ -156,7 +182,10 @@ def discover_episodes(config):
                         expected_shapes = shapes
                     elif shapes != expected_shapes:
                         raise ValueError(f"{path}::{key} observation shapes differ from other selected episodes")
-                    episodes.append(Episode(path, f"data/{key}", length, status, controlled_indices))
+                    episodes.append(Episode(
+                        path, f"data/{key}", length, status, controlled_indices,
+                        action_names, proprio_layout,
+                    ))
     missing_keys = sorted(key for key, paths in matched_keys.items() if not paths)
     if missing_keys:
         raise ValueError(f"Requested episode_keys were not found: {missing_keys}")
@@ -328,11 +357,16 @@ def dataset_manifest(config, train, validation):
     for path in sorted({episode.path for episode in (*train.episodes, *validation.episodes)}):
         stat = Path(path).stat()
         fingerprints[path] = {"size": stat.st_size, "mtime_ns": stat.st_mtime_ns}
+    all_episodes = (*train.episodes, *validation.episodes)
+    contract_episode = all_episodes[0]
     return {
         "config": {key: list(value) if isinstance(value, tuple) else value for key, value in config.items()},
         "train_episodes": [episode.identity for episode in train.episodes],
         "validation_episodes": [episode.identity for episode in validation.episodes],
-        "controlled_joint_names": list(ULTRA_ACTION_JOINT_NAMES),
-        "state_layout": list(TASK_STATE_NAMES) if tuple(config["state_keys"]) == ("proprio",) else None,
+        "controlled_joint_names": list(contract_episode.controlled_joint_names),
+        "state_layout": (
+            list(contract_episode.proprio_layout)
+            if tuple(config["state_keys"]) == ("proprio",) else None
+        ),
         "file_fingerprints": fingerprints,
     }

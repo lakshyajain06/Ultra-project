@@ -13,7 +13,10 @@ from urllib.parse import unquote, urlparse
 import h5py
 import numpy as np
 
-CAMERAS = ("head_rgb", "left_wrist_rgb", "right_wrist_rgb")
+CAMERAS = (
+    "head_rgb", "left_wrist_rgb", "right_wrist_rgb",
+    "task_rgb", "left_controlled_wrist_rgb", "right_controlled_wrist_rgb",
+)
 LABELS = ("success", "aborted", "timeout", "interrupted", "rejected", "synthetic")
 
 HTML = r"""<!doctype html>
@@ -35,10 +38,29 @@ let info,current=null,videoUrl=null,selection=0;
 const $=id=>document.getElementById(id); labels.forEach(x=>$('status').add(new Option(x,x)));
 async function api(url,options){const r=await fetch(url,options);if(!r.ok)throw Error(await r.text());return r.headers.get('content-type')?.includes('json')?r.json():r.arrayBuffer()}
 function renderList(){const box=$('episodes');box.innerHTML='';info.episodes.forEach(ep=>{const b=document.createElement('button');b.className='episode'+(current?.name===ep.name?' active':'');b.innerHTML=`<b>${ep.name}</b><span>${ep.effective_status}${ep.annotated?' • corrected':''} · ${ep.samples} frames · ${ep.seconds.toFixed(1)}s</span>`;b.onclick=()=>select(ep);box.appendChild(b)})}
-async function select(ep){const selected=++selection;current=null;$('video').pause();$('title').textContent=`Encoding ${ep.name}…`;$('details').textContent='Building an in-memory review video; no file is written';const loaded=await api(`/api/episode/${encodeURIComponent(ep.name)}`);const response=await fetch(`/api/video/${encodeURIComponent(ep.name)}`);if(!response.ok)throw Error(await response.text());const url=URL.createObjectURL(await response.blob());if(selected!==selection){URL.revokeObjectURL(url);return}if(videoUrl)URL.revokeObjectURL(videoUrl);videoUrl=url;$('video').src=url;current=ep;$('title').textContent=ep.name;$('details').textContent=`recorded: ${ep.recorded_status} · effective: ${ep.effective_status} · ${ep.samples} samples @ ${info.control_hz} Hz · ${(loaded.video_bytes/1048576).toFixed(1)} MiB in memory`;$('status').value=ep.effective_status;$('notes').value=ep.notes||'';renderList()}
+async function select(ep){const selected=++selection;current=null;$('video').pause();$('title').textContent=`Encoding ${ep.name}…`;$('details').textContent='Building an in-memory review video; no file is written';try{const loaded=await api(`/api/episode/${encodeURIComponent(ep.name)}`);const response=await fetch(`/api/video/${encodeURIComponent(ep.name)}`);if(!response.ok)throw Error(await response.text());const url=URL.createObjectURL(await response.blob());if(selected!==selection){URL.revokeObjectURL(url);return}if(videoUrl)URL.revokeObjectURL(videoUrl);videoUrl=url;$('video').src=url;current=ep;$('title').textContent=ep.name;$('details').textContent=`recorded: ${ep.recorded_status} · effective: ${ep.effective_status} · ${ep.samples} samples @ ${info.control_hz} Hz · ${(loaded.video_bytes/1048576).toFixed(1)} MiB in memory`;$('status').value=ep.effective_status;$('notes').value=ep.notes||'';renderList()}catch(error){if(selected!==selection)return;$('title').textContent=`Unable to load ${ep.name}`;$('details').textContent=error.message;console.error(error)}}
 $('save').onclick=async()=>{if(!current)return;const result=await api(`/api/annotation/${encodeURIComponent(current.name)}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:$('status').value,notes:$('notes').value})});Object.assign(current,result.episode);$('saved').textContent=`Saved to ${result.path}`;renderList();setTimeout(()=>$('saved').textContent='',2500)};
 api('/api/dataset').then(x=>{info=x;$('dataset').textContent=`${x.dataset}\n${x.task}`;renderList();if(x.episodes.length)select(x.episodes[0])}).catch(e=>document.body.textContent=e);
 </script></main></body></html>"""
+
+
+def episode_cameras(demo, metadata):
+    """Return recorded RGB streams, preferring the order stored by the recorder."""
+    obs = demo.get("obs")
+    if obs is None:
+        return []
+    configured = metadata.get("camera_streams", ())
+    if not isinstance(configured, (list, tuple)):
+        configured = ()
+    candidates = list(configured) + list(CAMERAS) + sorted(obs.keys())
+    cameras = []
+    for camera in candidates:
+        if not isinstance(camera, str) or camera in cameras or camera not in obs:
+            continue
+        dataset = obs[camera]
+        if isinstance(dataset, h5py.Dataset) and len(dataset.shape) == 4 and dataset.shape[-1] == 3:
+            cameras.append(camera)
+    return cameras
 
 
 def encode_mosaic_video(camera_frames, frame_rate):
@@ -127,7 +149,7 @@ class Annotator:
                     "notes": str(demo.attrs.get("annotation_notes", "")),
                     "annotated": "annotated_utc" in demo.attrs,
                     "samples": samples, "seconds": samples / control_hz,
-                    "cameras": [camera for camera in CAMERAS if f"obs/{camera}" in demo],
+                    "cameras": episode_cameras(demo, metadata),
                 })
         return {
             "dataset": str(self.dataset), "task": metadata.get("task", ""),
@@ -143,11 +165,12 @@ class Annotator:
                     if path not in handle:
                         raise ValueError("Unknown episode")
                     demo = handle[path]
-                    cameras = [camera for camera in CAMERAS if f"obs/{camera}" in demo]
+                    metadata = json.loads(handle.attrs.get("metadata", "{}"))
+                    cameras = episode_cameras(demo, metadata)
                     if not cameras:
                         raise ValueError("Episode has no recorded cameras")
                     frames = [np.asarray(demo[f"obs/{camera}"], dtype=np.uint8) for camera in cameras]
-                    control_hz = float(json.loads(handle.attrs.get("metadata", "{}")).get("control_hz", 25))
+                    control_hz = float(metadata.get("control_hz", 25))
                 video = encode_mosaic_video(frames, control_hz)
                 self.cached_episode = episode
                 self.cached_video = video
