@@ -3,6 +3,7 @@
 import gymnasium as gym
 
 from .cube_plate_pick_place import CAMERA_STREAMS, UltraCubePlateEnvCfg, configure_cameras
+from .dual_ultra import DualUltraEnvCfg, DualUltraSceneCfg, configure_dual_cameras
 
 gym.register(
     id="Isaac-Ultra-Cube-Plate-v0",
@@ -15,8 +16,18 @@ gym.register(
     },
 )
 
+gym.register(
+    id="Isaac-Dual-Ultra-Shared-Workspace-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={"env_cfg_entry_point": f"{__name__}.dual_ultra.dual_ultra_env_cfg:DualUltraEnvCfg"},
+)
+
 __all__ = [
     "CAMERA_STREAMS",
     "UltraCubePlateEnvCfg",
+    "DualUltraEnvCfg",
+    "DualUltraSceneCfg",
     "configure_cameras",
+    "configure_dual_cameras",
 ]
