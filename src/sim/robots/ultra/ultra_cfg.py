@@ -10,7 +10,10 @@ from isaaclab.assets import ArticulationCfg
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 ULTRA_USD = Path(
-    os.environ.get("ULTRA_USD_PATH", REPO_ROOT / "assets/robots/ultra/ultra.usd")
+    os.environ.get(
+        "ULTRA_USD_PATH",
+        REPO_ROOT / "assets/robots/ultra/ultra.usd",
+    )
 ).expanduser()
 
 
@@ -37,13 +40,17 @@ ULTRA_CFG = ArticulationCfg(
         rot=(0.0, 0.0, -0.70710678, 0.70710678),
         joint_pos={
             "torso_j[1-6]": 0.0,
-            "la_j1": 0.4697,
-            "la_j2": -0.5580,
-            "la_j3": 2.5408,
-            "la_j4": -2.2712,
-            "la_j5": 2.3473,
-            "la_j6": 0.3108,
-            "la_j7": -1.9000,
+            # Mirror the right arm's rest pose across the robot centerline. The
+            # source arm joint frames are not symmetric, so these values come
+            # from mirroring the right gripper/camera pose through FK and
+            # solving the left chain, rather than copying joint signs.
+            "la_j1": 0.39891509,
+            "la_j2": -0.57657599,
+            "la_j3": -0.94981771,
+            "la_j4": 0.93396082,
+            "la_j5": 2.42329425,
+            "la_j6": 0.37172631,
+            "la_j7": -1.45474803,
             "ra_j1": -0.4071,
             "ra_j2": 0.0615,
             "ra_j3": 0.2357,
