@@ -66,6 +66,16 @@ class ClutchMapper:
         Require release after invalid tracking / pause before moving again.
         Grippers also require the corresponding clutch to prevent unintended drops.
         """
+        if reference_pose is None:
+            reference_poses = None
+        else:
+            reference_poses = np.asarray(reference_pose)
+            if reference_poses.shape == (7,):
+                reference_poses = np.repeat(reference_poses[None], len(packet), axis=0)
+            if reference_poses.shape != (len(packet), 7):
+                raise ValueError(
+                    f"reference_pose must have shape (7,) or ({len(packet)}, 7), got {reference_poses.shape}"
+                )
         if self.target is None:
             self.target = measured.copy()
             self.armed = [False, False]
@@ -77,8 +87,8 @@ class ClutchMapper:
                 continue
             if self.rotation_offsets[i] is None:
                 reference_rot = (
-                    Rotation.identity() if reference_pose is None
-                    else Rotation.from_quat(reference_pose[3:7])
+                    Rotation.identity() if reference_poses is None
+                    else Rotation.from_quat(reference_poses[i, 3:7])
                 )
                 measured_world = reference_rot * Rotation.from_quat(measured[i, 3:7])
                 self.rotation_offsets[i] = Rotation.from_quat(row[3:7]).inv() * measured_world
@@ -91,8 +101,8 @@ class ClutchMapper:
             if self.anchor[i] is None:
                 # Use held target, so re-clutching cannot snap to a different wrist pose.
                 reference_rot = (
-                    Rotation.identity() if reference_pose is None
-                    else Rotation.from_quat(reference_pose[3:7])
+                    Rotation.identity() if reference_poses is None
+                    else Rotation.from_quat(reference_poses[i, 3:7])
                 )
                 self.anchor[i] = (row[:7].copy(), self.target[i].copy(), reference_rot)
             hand0, wrist0, reference_rot = self.anchor[i]

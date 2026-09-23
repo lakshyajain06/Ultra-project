@@ -11,6 +11,7 @@ from sim.teleop.control import (
     BodyTargetMapper, ClutchMapper, build_task_proprioception, compose_pose, relative_pose, solve_ik,
 )
 from data.recording import EpisodeRecorder
+from data.schema import DUAL_TASK_STATE_NAMES, DUAL_ULTRA_ACTION_JOINT_NAMES
 
 
 class TeleopTests(unittest.TestCase):
@@ -149,6 +150,18 @@ class TeleopTests(unittest.TestCase):
         wrist_world1 = compose_pose(body1, wrist_body)
         np.testing.assert_allclose(wrist_world1[:3], [0.2, -0.7, 0.1], atol=1e-7)
 
+    def test_each_controller_can_use_a_different_robot_body_frame(self):
+        mapper = ClutchMapper()
+        references = np.tile([0, 0, 0, 0, 0, 0, 1], (2, 1)).astype(np.float32)
+        references[1, 3:7] = Rotation.from_euler("z", 90, degrees=True).as_quat()
+        mapper.update(self.packet, self.pose, 0.04, reference_pose=references)
+        self.packet[:, 8] = 1
+        target, _ = mapper.update(self.packet, self.pose, 0.04, reference_pose=references)
+        np.testing.assert_allclose(target[0, 3:7], [0, 0, 0, 1], atol=1e-6)
+        np.testing.assert_allclose(
+            Rotation.from_quat(target[1, 3:7]).as_rotvec(), [0, 0, np.pi / 2], atol=1e-6
+        )
+
     def test_task_proprioception_has_canonical_22d_layout(self):
         joint_pos = np.arange(24, dtype=np.float32)
         eef = np.array([
@@ -192,6 +205,26 @@ class TeleopTests(unittest.TestCase):
                 self.assertEqual(file["data/demo_000001"].attrs["status"], "interrupted")
             with self.assertRaises(FileExistsError):
                 EpisodeRecorder(path, {})
+
+    def test_dual_robot_schema_accepts_16d_state_and_action(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "dual.hdf5"
+            metadata = {
+                "proprio_layout": list(DUAL_TASK_STATE_NAMES),
+                "action_joint_names": list(DUAL_ULTRA_ACTION_JOINT_NAMES),
+            }
+            recorder = EpisodeRecorder(path, metadata, schema_version=7)
+            state = {"proprio": np.zeros(16, dtype=np.float32)}
+            recorder.begin(state)
+            recorder.append(
+                state, np.zeros(16, dtype=np.float32), state,
+                self.packet, self.pose, 10.0, 0.04,
+            )
+            recorder.finish("success")
+            recorder.close()
+            with h5py.File(path) as file:
+                self.assertEqual(file.attrs["schema_version"], 7)
+                self.assertEqual(file["data/demo_000000/actions"].shape, (1, 16))
 
     def test_controller_graph_missing_tracking(self):
         try:

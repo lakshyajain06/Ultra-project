@@ -281,6 +281,66 @@ the recorder; only connecting the real Quest can validate tracking alignment,
 buttons, network latency, and headset comfort. Smoke datasets are not training
 demonstrations.
 
+## Dual-Ultra shared workspace
+
+The second environment places two Ultras side-by-side at a wide shared table.
+One operator controls the two inner arms: the left Quest controller drives the
+left robot's right arm, and the right controller drives the right robot's left
+arm. The other arms and both torsos hold their last joint targets; thumbsticks
+are reserved for a later torso-control mode. Pause, calibration, episode labels,
+and clutch safety behave like the single-Ultra teleop.
+
+The headless camera/IK path has been smoke-tested, but live Quest teleoperation
+has not yet been tested and should be treated as provisional until that check.
+
+Run a headset-free camera and IK smoke test:
+
+```bash
+uv run --locked --extra teleop python scripts/teleop_dual_ultra.py \
+  --smoke --steps 25 --viz none
+```
+
+Start live Quest teleoperation or collect demonstrations:
+
+```bash
+uv run --locked --extra teleop python scripts/teleop_dual_ultra.py --viz kit
+
+uv run --locked --extra teleop python scripts/teleop_dual_ultra.py \
+  --viz kit --dataset datasets/dual_ultra_001.hdf5 \
+  --task "Cooperatively place the cube on the plate"
+```
+
+The cube starts in the left robot's exclusive reach zone, both operated arms can
+reach the central handover region, and the plate is in the right robot's
+exclusive reach zone. Each Ultra is treated as a single-arm robot: its torso and
+unused arm remain fixed. Recorded schema-7 episodes contain 16-D proprioception
+and 16-D absolute targets, ordered as the left robot's right arm and gripper,
+followed by the right robot's left arm and gripper. The default image streams
+are the central task view and the two operated wrist cameras. Existing schema-6
+single-Ultra datasets remain unchanged.
+
+The manager reward stages are giver-to-cube proximity, cube lift, receiver
+approach while lifted, completed transfer, received-cube motion toward the
+plate, and stable released placement. Success requires observing the giver
+grasp, then the receiver grasp while the giver releases, followed by five stable
+placement steps. Direct placement without a recorded handover cannot succeed.
+
+List or replay a dual episode, and select its training configuration with:
+
+```bash
+uv run --locked python scripts/replay_dual_ultra.py datasets/dual_ultra_001.hdf5 --list
+uv run --locked python scripts/replay_dual_ultra.py datasets/dual_ultra_001.hdf5 --episode 0 --viz kit
+uv run --locked python scripts/train_policy.py dataset=dual_ultra \
+  'dataset.paths=[datasets/dual_ultra_001.hdf5]'
+```
+
+The registered manager environment is
+`Isaac-Dual-Ultra-Shared-Workspace-v0`. Its runtime contract can be checked with:
+
+```bash
+uv run --locked python scripts/debug/run_dual_ultra_rl_env.py --steps 10 --viz none
+```
+
 ## Manager-based RL evaluation environment
 
 `UltraCubePlateEnvCfg` provides a vectorized Isaac Lab `ManagerBasedRLEnv` for
