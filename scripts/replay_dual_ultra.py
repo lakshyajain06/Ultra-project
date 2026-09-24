@@ -63,7 +63,8 @@ from sim.teleop.dual_env import DualUltraTeleopEnv
 
 
 def main():
-    env = DualUltraTeleopEnv(args.device)
+    layout = metadata.get("layout", "facing" if metadata.get("environment") == "dual_ultra_facing" else "side_by_side")
+    env = DualUltraTeleopEnv(args.device, layout=layout)
     env.restore_initial_state(initial)
     period = 1.0 / (float(metadata.get("control_hz", 25.0)) * args.speed)
     print(

@@ -14,6 +14,12 @@ from isaaclab.app import AppLauncher
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--dataset", type=Path, help="New HDF5 path; omit to control without recording")
 parser.add_argument("--task", default="Cooperatively place the cube on the plate")
+parser.add_argument(
+    "--layout",
+    choices=("side_by_side", "facing"),
+    default="side_by_side",
+    help="Robot arrangement; facing records both robots' head cameras",
+)
 parser.add_argument("--smoke", action="store_true", help="Exercise both controlled arms without XR")
 parser.add_argument("--steps", type=int, default=0, help="Stop after N control steps; smoke defaults to 50")
 parser.add_argument("--seed", type=int, default=0)
@@ -51,13 +57,15 @@ from scipy.spatial.transform import Rotation
 from data import DUAL_TASK_STATE_NAMES
 from data.recording import EpisodeRecorder
 from sim.envs.dual_ultra import CONTROLLED_ARMS, DUAL_CAMERA_PATHS
+from sim.envs.facing_dual_ultra import (
+    FACING_CAMERA_PATHS,
+    FACING_CONTROLLED_ARMS,
+    FACING_TASK_CAMERA_PATH,
+)
 from sim.robots.ultra.ultra_cfg import REPO_ROOT, ULTRA_USD
 from sim.teleop.control import ClutchMapper
 from sim.teleop.dual_env import DualUltraTeleopEnv
 from sim.teleop.env import numpy
-
-
-TASK_CAMERA_PRIM_PATH = DUAL_CAMERA_PATHS["task_rgb"].replace("{ENV_REGEX_NS}", "/World/envs/env_0")
 
 
 def task_camera_anchor_rotation(yaw_offset_degrees):
@@ -70,17 +78,32 @@ def task_camera_anchor_rotation(yaw_offset_degrees):
 
 
 def main():
+    controlled_arms = FACING_CONTROLLED_ARMS if args.layout == "facing" else CONTROLLED_ARMS
+    camera_paths = FACING_CAMERA_PATHS if args.layout == "facing" else DUAL_CAMERA_PATHS
+    # Rows consumed by the controller must remain in canonical robot/action
+    # order. In the side view of the facing layout, robot_left appears on the
+    # operator's right, so swap the physical Quest hands for spatially natural
+    # control without changing the recorded action schema.
+    robot_to_controller = np.asarray((1, 0) if args.layout == "facing" else (0, 1))
+    controller_to_robot = np.argsort(robot_to_controller)
+    bindings = tuple(controlled_arms[index] for index in controller_to_robot)
+    task_camera_path = FACING_TASK_CAMERA_PATH if args.layout == "facing" else camera_paths["task_rgb"]
+    task_camera_prim_path = task_camera_path.replace(
+        "{ENV_REGEX_NS}", "/World/envs/env_0"
+    )
     env = DualUltraTeleopEnv(
         args.device,
         enable_cameras=args.enable_cameras,
         camera_width=args.camera_width,
         camera_height=args.camera_height,
+        layout=args.layout,
     )
     obs, _ = env.reset(seed=args.seed)
     mapper = ClutchMapper(scale=args.scale, rotation_offset_deg=args.tool_rotation_offset)
     metadata = {
         "task": args.task,
-        "environment": "dual_ultra_shared_workspace",
+        "environment": f"dual_ultra_{args.layout}",
+        "layout": args.layout,
         "seed": args.seed,
         "control_hz": 25,
         "physics_hz": 50,
@@ -88,8 +111,8 @@ def main():
         "observation_joint_names": env.observation_joint_names,
         "proprio_layout": list(DUAL_TASK_STATE_NAMES),
         "controller_bindings": {
-            "left": f"{CONTROLLED_ARMS[0][0]}/{CONTROLLED_ARMS[0][1]}",
-            "right": f"{CONTROLLED_ARMS[1][0]}/{CONTROLLED_ARMS[1][1]}",
+            "left": f"{bindings[0][0]}/{bindings[0][1]}",
+            "right": f"{bindings[1][0]}/{bindings[1][1]}",
         },
         "action_units": "two selected seven-joint arms: radians; two grippers: metres",
         "pose_convention": "selected wrist positions in each robot body frame; orientations in world; XYZW",
@@ -97,7 +120,7 @@ def main():
             "x", "y", "z", "qx", "qy", "qz", "qw", "trigger", "squeeze", "valid",
             "primary", "secondary", "stick_click", "stick_x", "stick_y",
         ],
-        "camera_streams": list(DUAL_CAMERA_PATHS),
+        "camera_streams": list(camera_paths),
         "camera_encoding": "uint8 RGB, HWC, lossless HDF5 LZF",
         "camera_width": args.camera_width,
         "camera_height": args.camera_height,
@@ -145,7 +168,7 @@ def main():
                 sim_device=args.device,
                 xr_cfg=XrCfg(
                     anchor_pos=(args.anchor_pos[0], args.anchor_pos[1], args.anchor_pos[2] - args.headset_height),
-                    anchor_prim_path=TASK_CAMERA_PRIM_PATH,
+                    anchor_prim_path=task_camera_prim_path,
                     anchor_rotation_mode=XrAnchorRotationMode.CUSTOM,
                     anchor_rotation_custom_func=task_camera_anchor_rotation(args.anchor_yaw),
                     fixed_anchor_height=False,
@@ -154,7 +177,8 @@ def main():
             )
             teleop = stack.enter_context(create_isaac_teleop_device(cfg, cloudxr_env_file=CLOUDXR_JS_ENV))
             print(
-                "Left hand: left robot right arm | Right hand: right robot left arm.\n"
+                f"Left hand: {bindings[0][0]} {bindings[0][1]} arm | "
+                f"Right hand: {bindings[1][0]} {bindings[1][1]} arm.\n"
                 "Grip clutches an arm; trigger closes its jaw. Thumbsticks are reserved.\n"
                 "X: success/reset | Y: abort/reset | B: pause | right stick click: recalibrate.",
                 flush=True,
@@ -165,26 +189,29 @@ def main():
             active = True
             reset_requested = False
             if args.smoke:
-                packet = np.zeros((2, 15), dtype=np.float32)
-                packet[:, :7] = start_pose
-                packet[:, 9] = 1
-                packet[:, 8] = float(step > 1)
+                control_packet = np.zeros((2, 15), dtype=np.float32)
+                control_packet[:, :7] = start_pose
+                control_packet[:, 9] = 1
+                control_packet[:, 8] = float(step > 1)
                 distance = min(max(step - 2, 0) * 0.001, 0.025)
-                packet[0, 0] += distance
-                packet[1, 0] -= distance
+                control_packet[0, 0] += distance
+                control_packet[1, 0] -= distance
                 angle = min(max(step - 2, 0) * 0.005, 0.15)
-                packet[0, 3:7] = (
+                control_packet[0, 3:7] = (
                     Rotation.from_euler("z", angle) * Rotation.from_quat(start_pose[0, 3:7])
                 ).as_quat()
-                packet[1, 3:7] = (
+                control_packet[1, 3:7] = (
                     Rotation.from_euler("z", -angle) * Rotation.from_quat(start_pose[1, 3:7])
                 ).as_quat()
+                packet = np.empty_like(control_packet)
+                packet[robot_to_controller] = control_packet
             else:
                 sample = teleop.advance()
                 events = teleop.last_control_events
                 active = sample is not None and events.is_active is True
                 reset_requested = events.should_reset
                 packet = numpy(sample).reshape(2, 15) if sample is not None else np.zeros((2, 15))
+                control_packet = packet[robot_to_controller]
 
             buttons = packet[:, 10:13] > 0.5
             rising = buttons & ~previous_buttons
@@ -211,7 +238,7 @@ def main():
 
             enabled = active and not paused
             targets, grippers = mapper.update(
-                packet,
+                control_packet,
                 obs["eef_pose_body"],
                 env.control_dt,
                 enabled,
@@ -261,7 +288,7 @@ def main():
                 recorder.finish("synthetic")
             if not np.isfinite(obs["joint_pos"]).all():
                 raise RuntimeError("Nonfinite joint state in dual-Ultra smoke test")
-            for key in DUAL_CAMERA_PATHS:
+            for key in camera_paths:
                 frame = obs[key]
                 expected = (args.camera_height, args.camera_width, 3)
                 if frame.shape != expected or frame.dtype != np.uint8 or np.ptp(frame) < 10:

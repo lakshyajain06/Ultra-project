@@ -11,6 +11,12 @@ from isaaclab.sim import SimulationContext
 
 from sim import UltraJointPositionController
 from sim.envs.dual_ultra import CONTROLLED_ARMS, DUAL_CAMERA_PATHS, DualUltraSceneCfg, dual_robot_camera_cfg
+from sim.envs.facing_dual_ultra import (
+    FACING_CAMERA_PATHS,
+    FACING_CONTROLLED_ARMS,
+    FacingDualUltraSceneCfg,
+    facing_robot_camera_cfg,
+)
 from sim.robots.ultra import as_torch
 from .control import compose_pose, relative_pose, solve_ik
 from .env import numpy
@@ -40,27 +46,57 @@ class DualUltraTeleopEnv(gym.Env):
     action_dim = 16
     proprio_dim = 16
 
-    def __init__(self, device="cuda:0", enable_cameras=False, camera_width=320, camera_height=240):
+    def __init__(
+        self,
+        device="cuda:0",
+        enable_cameras=False,
+        camera_width=320,
+        camera_height=240,
+        layout="side_by_side",
+    ):
+        if layout == "side_by_side":
+            scene_type = DualUltraSceneCfg
+            controlled_arms = CONTROLLED_ARMS
+            camera_paths = DUAL_CAMERA_PATHS
+            camera_factory = dual_robot_camera_cfg
+            viewer_eye = (0.0, 3.8, 2.5)
+            viewer_target = (0.0, 0.2, 0.85)
+        elif layout == "facing":
+            scene_type = FacingDualUltraSceneCfg
+            controlled_arms = FACING_CONTROLLED_ARMS
+            camera_paths = FACING_CAMERA_PATHS
+            camera_factory = facing_robot_camera_cfg
+            viewer_eye = (1.9, 0.2, 2.2)
+            viewer_target = (0.0, 0.2, 0.85)
+        else:
+            raise ValueError(f"Unknown dual-Ultra layout: {layout}")
+        self.layout = layout
+        self.camera_paths = camera_paths
         self.sim = SimulationContext(sim_utils.SimulationCfg(dt=0.02, render_interval=1, device=device))
-        self.sim.set_camera_view(eye=(0.0, 3.8, 2.5), target=(0.0, 0.2, 0.85))
-        cfg = DualUltraSceneCfg(num_envs=1, env_spacing=4.0)
+        self.sim.set_camera_view(eye=viewer_eye, target=viewer_target)
+        cfg = scene_type(num_envs=1, env_spacing=4.0)
         self.camera_names = ()
         if enable_cameras:
             if camera_width <= 0 or camera_height <= 0:
                 raise ValueError("Camera width and height must be positive")
-            for stream in DUAL_CAMERA_PATHS:
+            for stream in camera_paths:
                 name = stream.removesuffix("_rgb") + "_camera"
-                setattr(cfg, name, dual_robot_camera_cfg(stream, camera_width, camera_height))
-            self.camera_names = tuple(stream.removesuffix("_rgb") + "_camera" for stream in DUAL_CAMERA_PATHS)
+                setattr(cfg, name, camera_factory(stream, camera_width, camera_height))
+            if layout == "facing":
+                # The task camera anchors XR but is deliberately not part of
+                # the six recorded/policy streams.
+                cfg.task_camera = camera_factory("task_rgb", camera_width, camera_height)
+            self.camera_names = tuple(stream.removesuffix("_rgb") + "_camera" for stream in camera_paths)
         self.scene = InteractiveScene(cfg)
         self.sim.reset()
         if enable_cameras:
+            task_eye = (1.75, 0.20, 1.75) if layout == "facing" else (0.0, 2.4, 1.75)
             self.scene["task_camera"].set_world_poses_from_view(
-                np.asarray([[0.0, 2.4, 1.75]], dtype=np.float32),
+                np.asarray([task_eye], dtype=np.float32),
                 np.asarray([[0.0, 0.15, 0.86]], dtype=np.float32),
             )
 
-        self.robots = tuple(self._resolve_robot(name, arm) for name, arm in CONTROLLED_ARMS)
+        self.robots = tuple(self._resolve_robot(name, arm) for name, arm in controlled_arms)
         action_limits = np.concatenate([
             numpy(handles.limits[[*handles.selected_arm_ids, handles.gripper_ids[0 if handles.arm == "la" else 1]]])
             for handles in self.robots

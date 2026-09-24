@@ -1,6 +1,7 @@
 """Smoke-test the manager-based dual-Ultra shared-workspace environment."""
 
 import argparse
+from pathlib import Path
 
 from isaaclab.app import AppLauncher
 
@@ -8,9 +9,11 @@ from isaaclab.app import AppLauncher
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--num_envs", type=int, default=1)
 parser.add_argument("--steps", type=int, default=10)
+parser.add_argument("--layout", choices=("side_by_side", "facing"), default="side_by_side")
 parser.add_argument("--vision", action="store_true")
 parser.add_argument("--camera-width", type=int, default=320)
 parser.add_argument("--camera-height", type=int, default=240)
+parser.add_argument("--dump-dir", type=Path, help="Write the final enabled RGB frames as PNG files")
 AppLauncher.add_app_launcher_args(parser)
 args = parser.parse_args()
 if args.num_envs <= 0 or args.steps < 0 or min(args.camera_width, args.camera_height) <= 0:
@@ -24,13 +27,16 @@ app = launcher.app
 import torch
 from isaaclab.envs import ManagerBasedRLEnv
 
-from sim.envs import DualUltraEnvCfg
+from sim.envs import DualUltraEnvCfg, FacingDualUltraEnvCfg
 from sim.envs.dual_ultra import DUAL_CAMERA_PATHS
+from sim.envs.facing_dual_ultra import FACING_CAMERA_PATHS
 
 
 def main():
-    cfg = DualUltraEnvCfg(
-        enabled_cameras=tuple(DUAL_CAMERA_PATHS) if args.vision else (),
+    cfg_type = FacingDualUltraEnvCfg if args.layout == "facing" else DualUltraEnvCfg
+    camera_paths = FACING_CAMERA_PATHS if args.layout == "facing" else DUAL_CAMERA_PATHS
+    cfg = cfg_type(
+        enabled_cameras=tuple(camera_paths) if args.vision else (),
         camera_width=args.camera_width,
         camera_height=args.camera_height,
     )
@@ -55,15 +61,22 @@ def main():
         if args.vision:
             expected.update({
                 key: (args.num_envs, args.camera_height, args.camera_width, 3)
-                for key in DUAL_CAMERA_PATHS
+                for key in camera_paths
             })
         for key, shape in expected.items():
             if tuple(policy[key].shape) != shape or not torch.isfinite(policy[key]).all():
                 raise RuntimeError(f"Invalid {key}: shape={tuple(policy[key].shape)}")
             if key.endswith("_rgb") and (policy[key].amax() - policy[key].amin()).item() < 10:
                 raise RuntimeError(f"Rendered {key} has insufficient dynamic range")
+        if args.dump_dir:
+            from PIL import Image
+
+            args.dump_dir.mkdir(parents=True, exist_ok=True)
+            for key in camera_paths:
+                image = policy[key][0].detach().cpu().numpy().clip(0, 255).astype("uint8")
+                Image.fromarray(image).save(args.dump_dir / f"{args.layout}_{key}.png")
         print(
-            f"DUAL RL ENV SMOKE PASS: envs={args.num_envs}, steps={args.steps}, "
+            f"DUAL RL ENV SMOKE PASS: layout={args.layout}, envs={args.num_envs}, steps={args.steps}, "
             f"action_shape={tuple(actions.shape)}, reward_mean={rewards.mean().item():.4f}, "
             f"terminated={terminated.sum().item()}, truncated={truncated.sum().item()}",
             flush=True,

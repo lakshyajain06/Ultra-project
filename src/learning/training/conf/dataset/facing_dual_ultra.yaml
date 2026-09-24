@@ -1,0 +1,12 @@
+paths: []
+episode_keys: []
+chunk_size: 25
+state_keys:
+  - proprio
+camera_names:
+  - robot_left_head_rgb
+  - robot_right_head_rgb
+statuses:
+  - success
+validation_fraction: 0.1
+seed: 0

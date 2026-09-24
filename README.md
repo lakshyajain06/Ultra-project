@@ -293,6 +293,29 @@ and clutch safety behave like the single-Ultra teleop.
 The headless camera/IK path has been smoke-tested, but live Quest teleoperation
 has not yet been tested and should be treated as provisional until that check.
 
+For interaction policies, the face-to-face variant rotates the second Ultra by
+180 degrees and places it across the table. It records six policy streams: each
+robot's authored `zed_left` head camera and both of its wrist cameras. Each head
+view contains the task objects, shared handover region, and the other robot. The
+reviewer groups the streams into two side-by-side triangles, with each robot's
+head view above its left/right wrist views. The separate task camera is used
+only as the live XR viewpoint and is not recorded. Quest bindings are swapped relative to the
+side-by-side layout so the left controller drives the robot shown on the left
+and the right controller drives the robot shown on the right. Run its teleop
+and headless visual check with:
+
+```bash
+uv run --locked --extra teleop python scripts/teleop_dual_ultra.py \
+  --layout facing --viz kit
+
+uv run --locked python scripts/debug/run_dual_ultra_rl_env.py \
+  --layout facing --vision --steps 10 --dump-dir /tmp/facing-dual --viz none
+```
+
+The manager environment is `Isaac-Facing-Dual-Ultra-Handover-v0`. Facing-layout
+datasets retain the same schema-7 16-D state/action contract and can be trained
+with `dataset=facing_dual_ultra`.
+
 Run a headset-free camera and IK smoke test:
 
 ```bash

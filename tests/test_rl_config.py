@@ -9,7 +9,13 @@ import torch
 from isaaclab.managers import SceneEntityCfg
 from data.schema import TASK_STATE_NAMES, ULTRA_ACTION_JOINT_NAMES
 from sim import ULTRA_CONTROLLED_JOINT_NAMES
-from sim.envs import DualUltraEnvCfg, UltraCubePlateEnvCfg, configure_cameras, configure_dual_cameras
+from sim.envs import (
+    DualUltraEnvCfg,
+    FacingDualUltraEnvCfg,
+    UltraCubePlateEnvCfg,
+    configure_cameras,
+    configure_dual_cameras,
+)
 from sim.envs.dual_ultra import (
     CONTROLLED_ARMS,
     CUBE_START_POSITION,
@@ -18,6 +24,13 @@ from sim.envs.dual_ultra import (
     ROBOT_BASE_POSITIONS,
 )
 from sim.envs.dual_ultra import mdp as dual_mdp
+from sim.envs.facing_dual_ultra import (
+    FACING_CAMERA_PATHS,
+    FACING_CUBE_START_POSITION,
+    FACING_HANDOVER_POSITION,
+    FACING_PLATE_POSITION,
+    FACING_ROBOT_BASE_POSITIONS,
+)
 from sim.envs.cube_plate_pick_place import mdp
 
 
@@ -81,6 +94,39 @@ class ManagerBasedRLConfigTests(unittest.TestCase):
         self.assertGreater(math.dist(left, PLATE_POSITION), 1.4)
         self.assertLess(math.dist(left, HANDOVER_POSITION), 1.25)
         self.assertLess(math.dist(right, HANDOVER_POSITION), 1.25)
+
+    def test_facing_handover_uses_opposed_robots_and_both_head_cameras(self):
+        spec = gym.spec("Isaac-Facing-Dual-Ultra-Handover-v0")
+        self.assertEqual(
+            spec.kwargs["env_cfg_entry_point"],
+            "sim.envs.facing_dual_ultra.facing_dual_ultra_env_cfg:FacingDualUltraEnvCfg",
+        )
+        cfg = FacingDualUltraEnvCfg(
+            enabled_cameras=("robot_left_head_rgb", "robot_right_head_rgb"),
+            camera_width=160,
+            camera_height=120,
+        )
+        left_rotation = cfg.scene.robot_left.init_state.rot
+        right_rotation = cfg.scene.robot_right.init_state.rot
+        self.assertAlmostEqual(left_rotation[2], -right_rotation[2])
+        self.assertEqual(set(FACING_CAMERA_PATHS), {
+            "robot_left_head_rgb",
+            "robot_left_left_wrist_rgb",
+            "robot_left_right_wrist_rgb",
+            "robot_right_head_rgb",
+            "robot_right_left_wrist_rgb",
+            "robot_right_right_wrist_rgb",
+        })
+        self.assertEqual(cfg.scene.robot_left_head_camera.width, 160)
+        self.assertEqual(cfg.scene.robot_right_head_camera.height, 120)
+        left = FACING_ROBOT_BASE_POSITIONS["robot_left"]
+        right = FACING_ROBOT_BASE_POSITIONS["robot_right"]
+        self.assertLess(math.dist(left, FACING_CUBE_START_POSITION), 1.15)
+        self.assertGreater(math.dist(right, FACING_CUBE_START_POSITION), 1.4)
+        self.assertLess(math.dist(right, FACING_PLATE_POSITION), 1.15)
+        self.assertGreater(math.dist(left, FACING_PLATE_POSITION), 1.4)
+        self.assertLess(math.dist(left, FACING_HANDOVER_POSITION), 1.25)
+        self.assertLess(math.dist(right, FACING_HANDOVER_POSITION), 1.25)
 
     def test_success_requires_observed_pick_handover_and_stable_placement(self):
         cube_position = torch.tensor([[0.0, 0.0, 0.90]])
