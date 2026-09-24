@@ -34,24 +34,31 @@ HTML = r"""<!doctype html>
 <html><head><meta charset="utf-8"><title>Ultra dataset annotator</title>
 <style>
 :root{color-scheme:dark;font:15px system-ui;background:#12151a;color:#e8edf2}*{box-sizing:border-box}
-body{margin:0;display:grid;grid-template-columns:280px 1fr;height:100vh}aside{padding:18px;border-right:1px solid #343a43;overflow:auto}
-main{padding:18px;overflow:auto}h1{font-size:19px;margin:0 0 6px}.muted{color:#9ca7b5;font-size:13px}.episode{width:100%;text-align:left;padding:10px;margin:4px 0;border:1px solid #343a43;border-radius:7px;background:#1b2027;color:inherit;cursor:pointer}.episode.active{border-color:#5aa7ff;background:#202c39}.episode b{display:block}.episode span{font-size:12px;color:#aab4c0}
+body{margin:0;display:grid;grid-template-columns:300px 1fr;height:100vh}aside{padding:18px;border-right:1px solid #343a43;overflow:auto}
+main{padding:18px;overflow:auto}h1{font-size:19px;margin:0 0 6px}h2{font-size:13px;text-transform:uppercase;letter-spacing:.08em;color:#9ca7b5;margin:18px 0 8px}.muted{color:#9ca7b5;font-size:13px;white-space:pre-line}.episode{width:100%;text-align:left;padding:10px;margin:4px 0;border:1px solid #343a43;border-radius:7px;background:#1b2027;color:inherit;cursor:pointer}.episode.active{border-color:#5aa7ff;background:#202c39}.episode b{display:block}.episode span{font-size:12px;color:#aab4c0}
 video{display:block;width:min(100%,960px);max-height:70vh;background:#050608;margin:16px auto;border-radius:8px}button,select,textarea{font:inherit}.primary{background:#2388ed;color:white;border:0;border-radius:6px;padding:8px 14px;cursor:pointer}.panel{display:grid;grid-template-columns:180px 1fr auto;gap:10px;align-items:start;background:#1b2027;padding:14px;border-radius:8px}select,textarea{background:#101318;color:inherit;border:1px solid #414854;border-radius:5px;padding:8px}textarea{min-height:70px;resize:vertical}.saved{color:#70d99b;padding:8px}
+.filter{display:grid;gap:5px;margin:14px 0}.filter select{width:100%}.stats{display:grid;gap:4px}.stat{display:grid;grid-template-columns:1fr auto;gap:8px;padding:5px 7px;border-radius:5px;background:#1b2027;font-size:12px}.stat span:last-child{color:#aab4c0;text-align:right}.stat.total{border-top:1px solid #414854;margin-top:3px;font-weight:600}.empty{padding:12px 4px;color:#9ca7b5;font-size:13px}
 @media(max-width:900px){body{grid-template-columns:1fr;height:auto}aside{border-right:0;border-bottom:1px solid #343a43}.panel{grid-template-columns:1fr}}
 </style></head><body>
-<aside><h1>Ultra annotator</h1><div id="dataset" class="muted"></div><div id="episodes"></div></aside>
+<aside><h1>Ultra annotator</h1><div id="dataset" class="muted"></div>
+<label class="filter">Filter by label<select id="filter"></select></label>
+<h2>Label statistics</h2><div id="stats" class="stats"></div>
+<h2 id="episode-heading">Episodes</h2><div id="episodes"></div></aside>
 <main><h1 id="title">Select an episode</h1><div id="details" class="muted"></div>
 <video id="video" controls playsinline></video>
 <div class="panel"><select id="status"></select><textarea id="notes" placeholder="Notes about this episode or label correction"></textarea><button id="save" class="primary">Save correction</button></div><div id="saved" class="saved"></div>
 <script>
 const labels=['success','aborted','timeout','interrupted','rejected','synthetic'];
 let info,current=null,videoUrl=null,selection=0;
-const $=id=>document.getElementById(id); labels.forEach(x=>$('status').add(new Option(x,x)));
+const $=id=>document.getElementById(id); labels.forEach(x=>$('status').add(new Option(x,x)));$('filter').add(new Option('All labels',''));
 async function api(url,options){const r=await fetch(url,options);if(!r.ok)throw Error(await r.text());return r.headers.get('content-type')?.includes('json')?r.json():r.arrayBuffer()}
-function renderList(){const box=$('episodes');box.innerHTML='';info.episodes.forEach(ep=>{const b=document.createElement('button');b.className='episode'+(current?.name===ep.name?' active':'');b.innerHTML=`<b>${ep.name}</b><span>${ep.effective_status}${ep.annotated?' • corrected':''} · ${ep.samples} frames · ${ep.seconds.toFixed(1)}s</span>`;b.onclick=()=>select(ep);box.appendChild(b)})}
+function visibleEpisodes(){const label=$('filter').value;return info.episodes.filter(ep=>!label||ep.effective_status===label)}
+function renderStats(){const stats=new Map();info.episodes.forEach(ep=>{const row=stats.get(ep.effective_status)||{episodes:0,samples:0};row.episodes++;row.samples+=ep.samples;stats.set(ep.effective_status,row)});const box=$('stats');box.innerHTML='';const order=[...labels,...[...stats.keys()].filter(x=>!labels.includes(x)).sort()];order.forEach(label=>{const row=stats.get(label)||{episodes:0,samples:0};const div=document.createElement('div');div.className='stat';div.innerHTML=`<span>${label}</span><span>${row.episodes} eps · ${row.samples.toLocaleString()} samples</span>`;box.appendChild(div)});const total=document.createElement('div');total.className='stat total';total.innerHTML=`<span>Total</span><span>${info.episodes.length} eps · ${info.episodes.reduce((n,ep)=>n+ep.samples,0).toLocaleString()} samples</span>`;box.appendChild(total)}
+function renderList(){const episodes=visibleEpisodes(),box=$('episodes');box.innerHTML='';$('episode-heading').textContent=`Episodes (${episodes.length}/${info.episodes.length})`;if(!episodes.length){box.innerHTML='<div class="empty">No episodes match this label.</div>';return}episodes.forEach(ep=>{const b=document.createElement('button');b.className='episode'+(current?.name===ep.name?' active':'');b.innerHTML=`<b>${ep.name}</b><span>${ep.effective_status}${ep.annotated?' • corrected':''} · ${ep.samples} frames · ${ep.seconds.toFixed(1)}s</span>`;b.onclick=()=>select(ep);box.appendChild(b)})}
 async function select(ep){const selected=++selection;current=null;$('video').pause();$('title').textContent=`Encoding ${ep.name}…`;$('details').textContent='Building an in-memory review video; no file is written';try{const loaded=await api(`/api/episode/${encodeURIComponent(ep.name)}`);const response=await fetch(`/api/video/${encodeURIComponent(ep.name)}`);if(!response.ok)throw Error(await response.text());const url=URL.createObjectURL(await response.blob());if(selected!==selection){URL.revokeObjectURL(url);return}if(videoUrl)URL.revokeObjectURL(videoUrl);videoUrl=url;$('video').src=url;current=ep;$('title').textContent=ep.name;$('details').textContent=`recorded: ${ep.recorded_status} · effective: ${ep.effective_status} · ${ep.samples} samples @ ${info.control_hz} Hz · ${(loaded.video_bytes/1048576).toFixed(1)} MiB in memory`;$('status').value=ep.effective_status;$('notes').value=ep.notes||'';renderList()}catch(error){if(selected!==selection)return;$('title').textContent=`Unable to load ${ep.name}`;$('details').textContent=error.message;console.error(error)}}
-$('save').onclick=async()=>{if(!current)return;const result=await api(`/api/annotation/${encodeURIComponent(current.name)}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:$('status').value,notes:$('notes').value})});Object.assign(current,result.episode);$('saved').textContent=`Saved to ${result.path}`;renderList();setTimeout(()=>$('saved').textContent='',2500)};
-api('/api/dataset').then(x=>{info=x;$('dataset').textContent=`${x.dataset}\n${x.task}`;renderList();if(x.episodes.length)select(x.episodes[0])}).catch(e=>document.body.textContent=e);
+$('filter').onchange=renderList;
+$('save').onclick=async()=>{if(!current)return;const result=await api(`/api/annotation/${encodeURIComponent(current.name)}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:$('status').value,notes:$('notes').value})});Object.assign(current,result.episode);$('saved').textContent=`Saved to ${result.path}`;renderStats();renderList();setTimeout(()=>$('saved').textContent='',2500)};
+api('/api/dataset').then(x=>{info=x;$('dataset').textContent=`${x.dataset}\n${x.task}`;const statuses=[...new Set(x.episodes.map(ep=>ep.effective_status))];[...labels,...statuses.filter(s=>!labels.includes(s)).sort()].forEach(label=>$('filter').add(new Option(label,label)));renderStats();renderList();if(x.episodes.length)select(x.episodes[0])}).catch(e=>document.body.textContent=e);
 </script></main></body></html>"""
 
 
@@ -74,6 +81,31 @@ def episode_cameras(demo, metadata):
         if isinstance(dataset, h5py.Dataset) and len(dataset.shape) == 4 and dataset.shape[-1] == 3:
             cameras.append(camera)
     return cameras
+
+
+def label_statistics(episodes):
+    """Count episodes, samples, and duration for each effective label."""
+    counts = {
+        label: {"label": label, "episodes": 0, "samples": 0, "seconds": 0.0}
+        for label in LABELS
+    }
+    for episode in episodes:
+        label = episode["effective_status"]
+        row = counts.setdefault(
+            label, {"label": label, "episodes": 0, "samples": 0, "seconds": 0.0}
+        )
+        row["episodes"] += 1
+        row["samples"] += episode["samples"]
+        row["seconds"] += episode["seconds"]
+    ordered_labels = [*LABELS, *sorted(set(counts).difference(LABELS))]
+    return {
+        "labels": [counts[label] for label in ordered_labels],
+        "total": {
+            "episodes": sum(row["episodes"] for row in counts.values()),
+            "samples": sum(row["samples"] for row in counts.values()),
+            "seconds": sum(row["seconds"] for row in counts.values()),
+        },
+    }
 
 
 def compose_mosaic_frame(camera_frames, index, camera_names=None):
@@ -197,6 +229,7 @@ class Annotator:
         return {
             "dataset": str(self.dataset), "task": metadata.get("task", ""),
             "control_hz": control_hz, "episodes": episodes,
+            "statistics": label_statistics(episodes),
         }
 
     def load_episode(self, episode):

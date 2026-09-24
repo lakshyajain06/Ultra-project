@@ -38,14 +38,40 @@ def test_annotation_updates_hdf5_and_preserves_original_status():
         assert episode["effective_status"] == "success"
         assert episode["annotated"] is True
 
-        annotator.annotate("demo_000000", "rejected", "Bad camera view")
+        annotator.annotate("demo_000000", "aborted", "Task was not completed")
         with h5py.File(path, "r") as handle:
             attrs = handle["data/demo_000000"].attrs
             assert attrs["original_status"] == "aborted"
-            assert attrs["status"] == "rejected"
+            assert attrs["status"] == "aborted"
             assert not bool(attrs["success"])
-            assert attrs["annotation_notes"] == "Bad camera view"
+            assert attrs["annotation_notes"] == "Task was not completed"
             assert attrs["annotated_utc"]
+
+
+def test_summary_counts_episodes_and_samples_per_effective_label():
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "labeled_episodes.hdf5"
+        with h5py.File(path, "w") as handle:
+            handle.attrs["metadata"] = json.dumps({"task": "test", "control_hz": 10})
+            for index, (status, samples) in enumerate(
+                (("success", 2), ("aborted", 3), ("aborted", 4), ("success", 5))
+            ):
+                demo = handle.create_group(f"data/demo_{index:06d}")
+                demo.attrs["status"] = status
+                demo.create_dataset("actions", data=np.zeros((samples, 2), dtype=np.float32))
+                demo.create_dataset(
+                    "obs/head_rgb", data=np.zeros((samples, 3, 4, 3), dtype=np.uint8)
+                )
+
+        statistics = MODULE.Annotator(path).summary()["statistics"]
+        by_label = {row["label"]: row for row in statistics["labels"]}
+        assert by_label["success"] == {
+            "label": "success", "episodes": 2, "samples": 7, "seconds": 0.7,
+        }
+        assert by_label["aborted"] == {
+            "label": "aborted", "episodes": 2, "samples": 7, "seconds": 0.7,
+        }
+        assert statistics["total"] == {"episodes": 4, "samples": 14, "seconds": 1.4}
 
 
 def test_dual_ultra_camera_streams_are_discovered_and_encoded():
