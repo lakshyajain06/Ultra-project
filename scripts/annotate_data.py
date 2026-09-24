@@ -4,6 +4,7 @@ import argparse
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import math
 from pathlib import Path
 import shutil
 import subprocess
@@ -16,6 +17,16 @@ import numpy as np
 CAMERAS = (
     "head_rgb", "left_wrist_rgb", "right_wrist_rgb",
     "task_rgb", "left_controlled_wrist_rgb", "right_controlled_wrist_rgb",
+    "robot_left_head_rgb", "robot_left_left_wrist_rgb", "robot_left_right_wrist_rgb",
+    "robot_right_head_rgb", "robot_right_left_wrist_rgb", "robot_right_right_wrist_rgb",
+)
+FACING_DUAL_CAMERAS = (
+    "robot_left_head_rgb",
+    "robot_left_left_wrist_rgb",
+    "robot_left_right_wrist_rgb",
+    "robot_right_head_rgb",
+    "robot_right_left_wrist_rgb",
+    "robot_right_right_wrist_rgb",
 )
 LABELS = ("success", "aborted", "timeout", "interrupted", "rejected", "synthetic")
 
@@ -52,7 +63,9 @@ def episode_cameras(demo, metadata):
     configured = metadata.get("camera_streams", ())
     if not isinstance(configured, (list, tuple)):
         configured = ()
-    candidates = list(configured) + list(CAMERAS) + sorted(obs.keys())
+    # Recorder metadata is the display contract. This lets upgraded datasets
+    # retain archived camera arrays without adding them to the review mosaic.
+    candidates = list(configured) if configured else list(CAMERAS) + sorted(obs.keys())
     cameras = []
     for camera in candidates:
         if not isinstance(camera, str) or camera in cameras or camera not in obs:
@@ -63,7 +76,48 @@ def episode_cameras(demo, metadata):
     return cameras
 
 
-def encode_mosaic_video(camera_frames, frame_rate):
+def compose_mosaic_frame(camera_frames, index, camera_names=None):
+    """Arrange one timestep, including the two-triangle facing-dual layout."""
+    height, width = camera_frames[0].shape[1:3]
+    names = tuple(camera_names or ())
+    if len(camera_frames) == 6 and set(names) == set(FACING_DUAL_CAMERAS):
+        by_name = dict(zip(names, camera_frames))
+        mosaic = np.zeros((height * 2, width * 4, 3), dtype=np.uint8)
+        # Each robot is a triangle: centered head above its two wrist views.
+        placements = {
+            "robot_left_head_rgb": (0, width // 2),
+            "robot_left_left_wrist_rgb": (height, 0),
+            "robot_left_right_wrist_rgb": (height, width),
+            "robot_right_head_rgb": (0, 2 * width + width // 2),
+            "robot_right_left_wrist_rgb": (height, 2 * width),
+            "robot_right_right_wrist_rgb": (height, 3 * width),
+        }
+        for name, (top, left) in placements.items():
+            mosaic[top:top + height, left:left + width] = by_name[name][index]
+        return mosaic
+    if len(camera_frames) == 1:
+        rows, columns = 1, 1
+    elif len(camera_frames) == 2:
+        rows, columns = 1, 2
+    elif len(camera_frames) == 3:
+        rows, columns = 2, 2
+    else:
+        columns = math.ceil(math.sqrt(len(camera_frames)))
+        rows = math.ceil(len(camera_frames) / columns)
+    mosaic = np.zeros((height * rows, width * columns, 3), dtype=np.uint8)
+    if len(camera_frames) == 3:
+        placements = ((0, width // 2), (height, 0), (height, width))
+    else:
+        placements = tuple(
+            (height * (camera // columns), width * (camera % columns))
+            for camera in range(len(camera_frames))
+        )
+    for frames, (top, left) in zip(camera_frames, placements):
+        mosaic[top:top + height, left:left + width] = frames[index]
+    return mosaic
+
+
+def encode_mosaic_video(camera_frames, frame_rate, camera_names=None):
     """Encode synchronized RGB arrays as a fragmented MP4 held entirely in RAM."""
     if not camera_frames or frame_rate <= 0:
         raise ValueError("At least one camera and a positive frame rate are required")
@@ -75,12 +129,8 @@ def encode_mosaic_video(camera_frames, frame_rate):
     count, height, width, _ = shapes[0]
     if not count:
         raise ValueError("Cannot encode an empty episode")
-    if len(camera_frames) == 1:
-        video_height, video_width = height, width
-    elif len(camera_frames) == 2:
-        video_height, video_width = height, width * 2
-    else:
-        video_height, video_width = height * 2, width * 2
+    first_mosaic = compose_mosaic_frame(camera_frames, 0, camera_names)
+    video_height, video_width = first_mosaic.shape[:2]
     video_height += video_height % 2
     video_width += video_width % 2
     command = [
@@ -101,18 +151,11 @@ def encode_mosaic_video(camera_frames, frame_rate):
         reader.start()
     try:
         for index in range(count):
-            if len(camera_frames) == 1:
-                mosaic = np.zeros((video_height, video_width, 3), dtype=np.uint8)
-                mosaic[:height, :width] = camera_frames[0][index]
-            else:
-                mosaic = np.zeros((video_height, video_width, 3), dtype=np.uint8)
-                if len(camera_frames) == 2:
-                    mosaic[:height, :width] = camera_frames[0][index]
-                    mosaic[:height, width:2 * width] = camera_frames[1][index]
-                else:
-                    mosaic[:height, width // 2:width // 2 + width] = camera_frames[0][index]
-                    mosaic[height:2 * height, :width] = camera_frames[1][index]
-                    mosaic[height:2 * height, width:2 * width] = camera_frames[2][index]
+            mosaic = compose_mosaic_frame(camera_frames, index, camera_names)
+            if mosaic.shape[:2] != (video_height, video_width):
+                padded = np.zeros((video_height, video_width, 3), dtype=np.uint8)
+                padded[:mosaic.shape[0], :mosaic.shape[1]] = mosaic
+                mosaic = padded
             process.stdin.write(np.ascontiguousarray(mosaic).tobytes())
     except BrokenPipeError:
         pass
@@ -171,7 +214,7 @@ class Annotator:
                         raise ValueError("Episode has no recorded cameras")
                     frames = [np.asarray(demo[f"obs/{camera}"], dtype=np.uint8) for camera in cameras]
                     control_hz = float(metadata.get("control_hz", 25))
-                video = encode_mosaic_video(frames, control_hz)
+                video = encode_mosaic_video(frames, control_hz, cameras)
                 self.cached_episode = episode
                 self.cached_video = video
             return {

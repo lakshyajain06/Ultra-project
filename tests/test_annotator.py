@@ -72,3 +72,36 @@ def test_dual_ultra_camera_streams_are_discovered_and_encoded():
         if shutil.which("ffmpeg"):
             loaded = annotator.load_episode("demo_000000")
             assert loaded["video_bytes"] > 0
+
+
+def test_facing_dual_six_camera_triangle_layout():
+    names = MODULE.FACING_DUAL_CAMERAS
+    frames = [np.full((1, 4, 6, 3), index + 1, np.uint8) for index in range(6)]
+    mosaic = MODULE.compose_mosaic_frame(frames, 0, names)
+    assert mosaic.shape == (8, 24, 3)
+    # Heads are centered above each pair of wrist cameras.
+    assert np.all(mosaic[0:4, 3:9] == 1)
+    assert np.all(mosaic[0:4, 15:21] == 4)
+    assert np.all(mosaic[4:8, 0:6] == 2)
+    assert np.all(mosaic[4:8, 6:12] == 3)
+    assert np.all(mosaic[4:8, 12:18] == 5)
+    assert np.all(mosaic[4:8, 18:24] == 6)
+    if shutil.which("ffmpeg"):
+        video = MODULE.encode_mosaic_video(frames, 25, names)
+        assert b"ftyp" in video[:32]
+
+
+def test_metadata_camera_contract_excludes_archived_streams():
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "upgraded.hdf5"
+        selected = list(MODULE.FACING_DUAL_CAMERAS)
+        with h5py.File(path, "w") as handle:
+            handle.attrs["metadata"] = json.dumps({"camera_streams": selected})
+            demo = handle.create_group("data/demo_000000")
+            demo.create_dataset("actions", data=np.zeros((1, 16), dtype=np.float32))
+            for camera in (*selected, "task_rgb"):
+                demo.create_dataset(f"obs/{camera}", data=np.zeros((1, 4, 6, 3), dtype=np.uint8))
+        with h5py.File(path) as handle:
+            assert MODULE.episode_cameras(
+                handle["data/demo_000000"], json.loads(handle.attrs["metadata"])
+            ) == selected
