@@ -1,0 +1,6 @@
+type: replay
+
+# Absolute or working-directory-relative HDF5 demonstration path.
+dataset: null
+# Accepts demo_000000 or data/demo_000000.
+episode: demo_000000

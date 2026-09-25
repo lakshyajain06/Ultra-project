@@ -36,7 +36,7 @@ parser.add_argument(
 )
 parser.add_argument(
     "--inference", choices=("receding", "chunk", "temporal_ensemble"),
-    help="Hydra inference group (default: checkpoint setting, then training/conf/config.yaml)",
+    help="Hydra inference group (default: checkpoint setting, then conf/config.yaml)",
 )
 parser.add_argument(
     "--temporal-decay", type=float,
@@ -77,11 +77,11 @@ args = parser.parse_args()
 from hydra import compose, initialize_config_dir
 from omegaconf import OmegaConf
 
-config_dir = Path(__file__).resolve().parents[1] / "src/learning/training/conf"
+config_dir = Path(__file__).resolve().parents[1] / "conf"
 selection = args.inference
 if selection is None and args.chunk_steps is not None:
     selection = "chunk" if args.chunk_steps > 1 else "receding"
-with initialize_config_dir(config_dir=str(config_dir), version_base=None):
+with initialize_config_dir(config_dir=str(config_dir)):
     config = compose(config_name="config", overrides=[f"inference={selection}"] if selection else [])
 hydra_inference = OmegaConf.to_container(config.inference, resolve=True)
 
@@ -167,7 +167,12 @@ inference_method = inference_settings["method"]
 if inference_method not in ("receding", "chunk", "temporal_ensemble"):
     parser.error(f"Unknown checkpoint inference method: {inference_method!r}")
 if inference_method == "chunk":
-    args.chunk_steps = args.chunk_steps if args.chunk_steps is not None else int(inference_settings["steps"])
+    configured_steps = inference_settings.get("steps")
+    args.chunk_steps = (
+        args.chunk_steps if args.chunk_steps is not None
+        else policy.model.config["chunk_size"] if configured_steps is None
+        else int(configured_steps)
+    )
     if args.chunk_steps <= 0:
         parser.error("inference.chunk.steps must be positive")
 else:

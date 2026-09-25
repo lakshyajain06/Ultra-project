@@ -1,1 +1,0 @@
-"""Hydra trainer configuration group."""

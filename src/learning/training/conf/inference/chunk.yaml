@@ -1,3 +1,0 @@
-# Execute this many actions from each prediction before replanning.
-method: chunk
-steps: 25

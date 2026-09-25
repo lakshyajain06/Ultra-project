@@ -337,7 +337,7 @@ def build_datasets(config):
     if missing or unexpected:
         raise ValueError(f"Invalid dataset config; missing={sorted(missing)}, unexpected={sorted(unexpected)}")
     if config["chunk_size"] <= 0:
-        raise ValueError("dataset.chunk_size must be positive")
+        raise ValueError("chunk_size must be positive")
     if not config["state_keys"] and not config["camera_names"]:
         raise ValueError("At least one state key or camera is required")
     episodes = discover_episodes(config)

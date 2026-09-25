@@ -24,29 +24,34 @@ class PolicyTrainer(ABC):
             self.device = "cpu"
         self.output = Path(config["output"])
         self._seed_everything(config["train"]["seed"])
-        self.train_data, self.validation_data, self.normalizer = build_datasets(config["dataset"])
-        self.manifest = dataset_manifest(config["dataset"], self.train_data, self.validation_data)
+        model = dict(config["model"])
+        self.model_name = model.pop("name")
+        chunk_size = model.pop("chunk_size")
+        inputs = dict(model.pop("inputs"))
+        model_parameters = dict(model.pop("architecture"))
+        self.model_loss = dict(model.pop("loss", {}))
+        model_parameters["image_encoder"] = dict(model.pop("encoder"))
+        if model:
+            raise ValueError(f"Unexpected model configuration keys: {sorted(model)}")
+        data_config = {**config["dataset"], **inputs, "chunk_size": chunk_size}
+        self.train_data, self.validation_data, self.normalizer = build_datasets(data_config)
+        self.manifest = dataset_manifest(data_config, self.train_data, self.validation_data)
         self.jaw_indices = tuple(
             index for index, name in enumerate(self.manifest["controlled_joint_names"])
             if name.endswith("gripper_joint")
         )
-        model = dict(config["model"])
-        self.model_name = model.pop("name")
-        model_parameters = dict(model.pop("parameters", {}))
-        self.model_training = dict(model.pop("training", {}))
-        if model:
-            raise ValueError(f"Unexpected model configuration keys: {sorted(model)}")
         self.model, self.model_config = self.create_model(
             self.model_name,
             model_parameters,
             state_dim=self.normalizer.state_mean.size,
             action_dim=self.normalizer.action_mean.size,
-            chunk_size=config["dataset"]["chunk_size"],
-            camera_names=config["dataset"]["camera_names"],
+            chunk_size=chunk_size,
+            camera_names=inputs["camera_names"],
         )
         self.model.to(self.device)
+        optimizer = config["train"]["optimizer"]
         self.optimizer = torch.optim.AdamW(
-            self.model.parameters(), lr=config["train"]["learning_rate"], weight_decay=config["train"]["weight_decay"],
+            self.model.parameters(), lr=optimizer["learning_rate"], weight_decay=optimizer["weight_decay"],
         )
         self.start_epoch, self.step, self.best = 0, 0, float("inf")
         if config["resume"]:
@@ -62,9 +67,7 @@ class PolicyTrainer(ABC):
     def fit(self):
         tracker = WandbTracker.start(
             **self.config["wandb"], output=self.output,
-            config=experiment_config(
-                self.config, self.model_config, self.model_name, self.model_training,
-            ),
+            config=experiment_config(self.config, self.model_config),
             resume=self.config["resume"] is not None,
         )
         tracker.set_summary({
@@ -124,13 +127,15 @@ class PolicyTrainer(ABC):
                 )
                 reconstruction, metrics = self.loss_and_metrics(prediction, actions, is_pad)
                 loss, objective_metrics = self.objective(
-                    reconstruction, auxiliary, self.config["train"], self.model_training,
+                    reconstruction, auxiliary, self.config["train"], self.model_loss,
                 )
                 metrics.update(objective_metrics)
                 if training:
                     self.optimizer.zero_grad(set_to_none=True)
                     loss.backward()
-                    gradient_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+                    gradient_norm = torch.nn.utils.clip_grad_norm_(
+                        self.model.parameters(), self.config["train"]["gradient_clip_norm"],
+                    )
                     self.optimizer.step()
                     metrics["gradient_norm"] = gradient_norm
                 metrics.update({

@@ -1,0 +1,4 @@
+type: checkpoint
+
+# Override with policy.checkpoint=outputs/training/RUN/best.pt.
+checkpoint: outputs/training/20260923_225003_-0400/best.pt

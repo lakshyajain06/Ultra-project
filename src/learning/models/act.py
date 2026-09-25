@@ -38,11 +38,17 @@ class ACTPolicy(nn.Module):
             nn.Sequential(nn.Linear(self.config["state_dim"], h), nn.LayerNorm(h))
             if self.config["state_dim"] else None
         )
+        encoder_target = self.config["image_encoder"].get("_target_", "")
+        if not encoder_target.startswith("learning.models.encoders."):
+            raise ValueError(
+                "image_encoder._target_ must be in learning.models.encoders, "
+                f"got {encoder_target!r}"
+            )
         self.image_encoders = nn.ModuleDict({
             name: instantiate(
                 self.config["image_encoder"],
                 output_dim=h,
-                _execution_whitelist_="learning.models.encoders.*",
+                _execution_whitelist_=("learning.models.encoders.*",),
             )
             for name in self.config["camera_names"]
         })

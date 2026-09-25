@@ -1,5 +1,9 @@
 """Simulator-independent policy checkpoint loading and preprocessing."""
 
+import json
+from pathlib import Path
+
+import h5py
 import numpy as np
 import torch
 
@@ -189,3 +193,117 @@ class PolicyInference:
         normalized = self.model.predict(state, images).cpu().numpy()
         actions = self.normalizer.denormalize_action(normalized)
         return actions if batched else actions[0]
+
+
+class ReplayInference:
+    """Replay one demonstration through the :class:`PolicyInference` interface.
+
+    ``predict`` ignores observation values, but uses their batch dimension to
+    maintain an independent playback cursor for every vectorized environment.
+    Each call emits a one-action chunk and advances the corresponding cursors.
+    Once the demonstration is exhausted, its final target is held.
+    """
+
+    class _ModelFacade:
+        """Expose the small model surface used by policy evaluation runners."""
+
+        def __init__(self):
+            self.config = {"chunk_size": 1}
+
+        def to(self, _device):
+            return self
+
+        def eval(self):
+            return self
+
+    def __init__(self, dataset, episode_key):
+        self.dataset = Path(dataset).expanduser()
+        self.episode_key = str(episode_key).removeprefix("data/")
+        if not self.episode_key:
+            raise ValueError("episode_key must identify an episode")
+
+        try:
+            with h5py.File(self.dataset, "r") as handle:
+                try:
+                    metadata = json.loads(handle.attrs.get("metadata", "{}"))
+                except (TypeError, json.JSONDecodeError) as error:
+                    raise ValueError(f"{self.dataset} has invalid JSON metadata") from error
+                path = f"data/{self.episode_key}"
+                if path not in handle:
+                    raise KeyError(f"Episode {self.episode_key!r} is not in {self.dataset}")
+                if f"{path}/actions" not in handle:
+                    raise KeyError(f"{self.dataset}::{path} has no actions dataset")
+                self.actions = np.asarray(handle[f"{path}/actions"], dtype=np.float32)
+        except OSError as error:
+            raise OSError(f"Could not open replay dataset {self.dataset}") from error
+
+        self.controlled_joint_names = tuple(metadata.get("action_joint_names", ()))
+        if not self.controlled_joint_names:
+            raise ValueError(f"{self.dataset} metadata has no action_joint_names")
+        if len(set(self.controlled_joint_names)) != len(self.controlled_joint_names):
+            raise ValueError("action_joint_names must be unique")
+        expected_shape = (len(self.controlled_joint_names),)
+        if self.actions.ndim != 2 or self.actions.shape[1:] != expected_shape:
+            raise ValueError(
+                f"{self.dataset}::data/{self.episode_key}/actions must have shape "
+                f"[steps,{expected_shape[0]}], got {self.actions.shape}"
+            )
+        if len(self.actions) == 0 or not np.isfinite(self.actions).all():
+            raise ValueError("Replay actions must be nonempty and finite")
+
+        # These attributes intentionally mirror PolicyInference so callers can
+        # select replay without special-casing policy setup.
+        self.model = self._ModelFacade()
+        self.model_name = "replay"
+        self.normalizer = None
+        self.state_keys = ()
+        self.camera_names = ()
+        self.device = torch.device("cpu")
+        self.inference_config = {"method": "receding"}
+        self.positions = None
+
+    @staticmethod
+    def _observation_batch_size(observation):
+        """Infer the PolicyInference batch convention without reading values."""
+        if observation is None:
+            return None
+        if not hasattr(observation, "items"):
+            raise TypeError("observation must be a mapping or None")
+        for key, value in observation.items():
+            shape = tuple(value.shape) if hasattr(value, "shape") else np.asarray(value).shape
+            if key in ("proprio", "joint_pos", "joint_vel") and len(shape) == 2:
+                return shape[0]
+            if key == "eef_pose_body" and len(shape) == 3:
+                return shape[0]
+            if len(shape) == 4 and shape[-1] in (3, 4):
+                return shape[0]
+        return None
+
+    def predict(self, observation, observation_joint_names=None):
+        """Return the next recorded target as a one-step action chunk."""
+        del observation_joint_names  # Accepted for PolicyInference compatibility.
+        batch_size = self._observation_batch_size(observation)
+        batched = batch_size is not None
+        batch_size = batch_size or 1
+        if self.positions is None:
+            self.positions = np.zeros(batch_size, dtype=np.int64)
+        elif len(self.positions) != batch_size:
+            raise ValueError(
+                f"Observation batch size changed from {len(self.positions)} to {batch_size}; "
+                "create a new ReplayInference for a differently sized rollout"
+            )
+
+        indices = np.minimum(self.positions, len(self.actions) - 1)
+        chunks = self.actions[indices, None, :].copy()
+        self.positions += 1
+        return chunks if batched else chunks[0]
+
+    def reset_env(self, env_index):
+        """Restart one vectorized environment at the first recorded action."""
+        if self.positions is None:
+            if env_index != 0:
+                raise IndexError("Replay batch has not been initialized")
+            return
+        if not 0 <= env_index < len(self.positions):
+            raise IndexError(f"env_index {env_index} is outside [0, {len(self.positions)})")
+        self.positions[env_index] = 0

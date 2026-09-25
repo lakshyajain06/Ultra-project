@@ -314,7 +314,37 @@ uv run --locked python scripts/debug/run_dual_ultra_rl_env.py \
 
 The manager environment is `Isaac-Facing-Dual-Ultra-Handover-v0`. Facing-layout
 datasets retain the same schema-7 16-D state/action contract and can be trained
-with `dataset=facing_dual_ultra`.
+with `task=facing_dual_ultra`.
+
+Evaluate a trained 16-action dual-Ultra policy with the config-driven bimanual
+runner:
+
+```bash
+uv run --locked python scripts/evaluate_bimanual_policy.py \
+  policy.checkpoint=outputs/training/RUN/best.pt \
+  environment=facing rollout.episodes=5
+```
+
+The evaluator is composed from Hydra's `bimanual_eval` config and the shared
+`policy` and `inference` groups. Overrides select the checkpoint, `facing` or `side_by_side`
+environment, number of parallel environments, episode count, horizon,
+visualization, and video recording. For example, add `inference=receding`,
+`simulation.num_envs=4`, or `recording.enabled=false`. Facing recordings add
+the third-person task view between the two head views above the four wrist
+views. The evaluator
+rejects single-Ultra checkpoints and camera/environment mismatches before
+beginning the rollout.
+
+To evaluate by replaying the absolute targets from one demonstration instead,
+swap the policy group and select its dataset and episode:
+
+```bash
+uv run --locked python scripts/evaluate_bimanual_policy.py \
+  policy=replay \
+  policy.dataset=data/demonstrations.hdf5 \
+  policy.episode=demo_000000 \
+  environment=facing
+```
 
 Run a headset-free camera and IK smoke test:
 
@@ -353,7 +383,7 @@ List or replay a dual episode, and select its training configuration with:
 ```bash
 uv run --locked python scripts/replay_dual_ultra.py datasets/dual_ultra_001.hdf5 --list
 uv run --locked python scripts/replay_dual_ultra.py datasets/dual_ultra_001.hdf5 --episode 0 --viz kit
-uv run --locked python scripts/train_policy.py dataset=dual_ultra \
+uv run --locked python scripts/train_policy.py task=dual_ultra \
   'dataset.paths=[datasets/dual_ultra_001.hdf5]'
 ```
 
@@ -435,14 +465,13 @@ substantially more expensive than state observations, so choose `num_envs`
 accordingly.
 ## Policy behavior-cloning training
 
-The default `model=act trainer=act` configuration selects a compact Action
-Chunking with Transformers policy and its `ACTTrainer`. Hydra chooses the
-trainer class; the generic entry point only composes the experiment and runs
-that class. The model-family registry is used separately to reconstruct models
-from checkpoints during inference. The
+The default `model=act task=ultra train=default` configuration selects a compact
+Action Chunking with Transformers policy and its `ACTTrainer`. The `train`
+preset owns the trainer class and optimization loop, while the model-family
+registry reconstructs models from checkpoints during inference. The
 HDF5 training pipeline runs outside Isaac Sim and uses
 only dependencies already present in the project. By default, each sample uses
-the 22D task-centric `proprio` vector, the head/right-wrist RGB frames, and
+the 22D task-centric `proprio` vector, the head and both wrist RGB frames, and
 predicts the next 25 absolute 22-joint targets. The state order is six torso
 joint angles, left body-relative EEF xyz + XYZW quaternion, left gripper opening,
 right body-relative EEF xyz + XYZW quaternion, and right gripper opening. This
@@ -453,8 +482,10 @@ positions from legacy 24-DOF recordings and combines them with
 `obs/eef_pose_body`; the two passive jaw followers are never included.
 State and action statistics are fitted on the training episodes only and stored
 inside every checkpoint. Training uses one Hydra YAML configuration with
-`dataset`, `encoder`, `model`, `train`, and `wandb` sections; command-line values use
-Hydra's `section.key=value` override syntax.
+`dataset`, `model`, `train`, `inference`, and `wandb` sections; command-line
+values use Hydra's `section.key=value` override syntax. A `task` preset composes
+the dataset defaults and the model's task-specific input streams without adding
+another level to the final configuration.
 
 Train on one or more collections:
 
@@ -474,29 +505,31 @@ Only `success` episodes are selected by default. Status selection is explicit;
 for exploratory training on a collection containing only aborted episodes use,
 for example, `dataset.statuses=[aborted]`. Splitting is deterministic and performed by
 episode, preventing transitions from one demonstration leaking across train and
-validation sets. Use `train.seed`, `dataset.validation_fraction`,
-`dataset.chunk_size`, `dataset.state_keys`, and `dataset.camera_names` to configure the input contract. The optional
+validation sets. Use `train.seed` and `dataset.validation_fraction` for the run
+and split. The model owns its prediction horizon and input contract through
+`model.chunk_size`, `model.inputs.state_keys`, and
+`model.inputs.camera_names`. The optional
 legacy 44D controlled q/qdot state remains available with
-`dataset.state_keys=[joint_pos,joint_vel]`. Cameras can be removed independently,
-including all of them (`dataset.camera_names=[]`), without changing the dataset
+`model.inputs.state_keys=[joint_pos,joint_vel]`. Cameras can be removed independently,
+including all of them (`model.inputs.camera_names=[]`), without changing the dataset
 format. For a vision-only policy, remove proprioception with
-`dataset.state_keys=[]`; at least one camera must remain enabled. Run with
+`model.inputs.state_keys=[]`; at least one camera must remain enabled. Run with
 `--help` to inspect the fully composed configuration tree.
-Configuration files live under `src/learning/training/conf`; Hydra groups make
+Configuration files live under the root-level `conf/` directory; Hydra groups make
 presets composable, for example
-`model=act trainer=act train=debug wandb=offline`. Model
+`task=facing_dual_ultra model=act train=debug wandb=offline`. Model
 parameters are overridden below the selected model, such as
-`model.parameters.hidden_dim=128`; ACT's KL weight is similarly configured as
-`model.training.kl_weight`. The default `encoder=cnn` is the compact camera
-encoder used by existing checkpoints. Select `encoder=resnet` for a
-torchvision ResNet-18, override its depth with `encoder.variant=resnet34` or
-`encoder.variant=resnet50`, and use `encoder.weights=DEFAULT` to start from
+`model.architecture.hidden_dim=128`; ACT's KL weight is similarly configured as
+`model.loss.kl_weight`. The default `model/encoder=cnn` is the compact camera
+encoder used by existing checkpoints. Select `model/encoder=resnet` for a
+torchvision ResNet-18, override its depth with `model.encoder.variant=resnet34` or
+`model.encoder.variant=resnet50`, and use `model.encoder.weights=DEFAULT` to start from
 ImageNet weights. Each configured camera gets its own encoder instance. Dataset,
 encoder, and model implementations validate their
 resolved YAML mappings when they construct runtime objects.
 Adding another policy family requires its model and trainer implementations,
-matching Hydra files under `training/conf/model` and `training/conf/trainer`,
-and a checkpoint-loading entry in `learning.models.registry`; the generic
+matching Hydra files under `conf/model` and `conf/train`, and
+a checkpoint-loading entry in `learning.models.registry`; the generic
 training and evaluation entry points do not change.
 Select exact demonstrations with `dataset.episode_keys`. Short keys are accepted
 with or without the `data/` prefix and must resolve uniquely across all selected
@@ -608,13 +641,13 @@ The evaluator selects the state or vision environment from the cameras stored
 in the checkpoint, uses the manager's success/drop/timeout terms, and prints
 one JSON record per episode followed by an aggregate `EVALUATION` record.
 Select execution with the Hydra configs under
-`src/learning/training/conf/inference/`, or override a checkpoint's saved
+`conf/inference/`, or override a checkpoint's saved
 setting with `--inference MODE`:
 
 | Mode | Execution |
 | --- | --- |
 | `receding` | Predict every step and execute only the first action. |
-| `chunk` | Predict once, then execute `steps` actions from that prediction without averaging. The default config uses 25 steps. |
+| `chunk` | Predict once, then execute the model's full chunk without averaging. Set `inference.steps=N` to replan sooner. |
 | `temporal_ensemble` | Predict every step and average overlapping predictions for the current action, weighting a prediction by `exp(-decay * age)`; larger decay favors newer chunks. |
 
 New checkpoints retain their Hydra inference setting. Older checkpoints use

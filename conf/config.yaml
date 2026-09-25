@@ -1,9 +1,7 @@
 defaults:
-  - dataset: ultra
-  - encoder: cnn
   - model: act
+  - task: ultra
   - inference: chunk
-  - trainer: act
   - train: default
   - wandb: default
   - _self_

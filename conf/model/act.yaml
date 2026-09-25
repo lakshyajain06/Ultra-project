@@ -1,11 +1,18 @@
+defaults:
+  - encoder: cnn
+  - _self_
+
 name: act
-parameters:
-  image_encoder: ${encoder}
+chunk_size: 25
+inputs:
+  state_keys: []
+  camera_names: []
+architecture:
   hidden_dim: 256
   latent_dim: 32
   feedforward_dim: 1024
   num_heads: 8
   num_layers: 4
   dropout: 0.1
-training:
+loss:
   kl_weight: 10.0

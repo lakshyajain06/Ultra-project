@@ -52,9 +52,8 @@ class WandbTracker:
         self.run.finish()
 
 
-def experiment_config(config, model_config, model_name=None, model_training=None):
-    """Return a JSON-compatible snapshot for the wandb run configuration."""
-    model = dict(model_config)
-    if model_name is not None:
-        model = {"name": model_name, "parameters": model, "training": model_training or {}}
-    return json.loads(json.dumps({**config, "model": model}))
+def experiment_config(config, model_config):
+    """Return the composed hierarchy plus the resolved runtime model contract."""
+    snapshot = json.loads(json.dumps(config))
+    snapshot["model"]["resolved"] = json.loads(json.dumps(model_config))
+    return snapshot

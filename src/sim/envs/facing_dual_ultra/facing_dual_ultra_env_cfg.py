@@ -9,6 +9,7 @@ from ..dual_ultra import mdp
 from ..dual_ultra.dual_ultra_env_cfg import DualUltraEnvCfg
 from .facing_dual_ultra_scene_cfg import (
     FACING_CAMERA_PATHS,
+    FACING_EVALUATION_CAMERA_STREAMS,
     FacingDualUltraSceneCfg,
     facing_robot_camera_cfg,
 )
@@ -32,13 +33,13 @@ class FacingDualUltraEnvCfg(DualUltraEnvCfg):
 
 
 def configure_facing_cameras(cfg, enabled, width=320, height=240):
-    unknown = set(enabled).difference(FACING_CAMERA_PATHS)
+    unknown = set(enabled).difference(FACING_EVALUATION_CAMERA_STREAMS)
     if unknown:
         raise ValueError(f"Unknown facing dual camera streams: {sorted(unknown)}")
     if width <= 0 or height <= 0:
         raise ValueError("Camera width and height must be positive")
     enabled = set(enabled)
-    for stream in FACING_CAMERA_PATHS:
+    for stream in FACING_EVALUATION_CAMERA_STREAMS:
         sensor_name = stream.removesuffix("_rgb") + "_camera"
         setattr(
             cfg.scene,

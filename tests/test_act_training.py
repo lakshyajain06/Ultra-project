@@ -13,7 +13,7 @@ from torch.utils.data import DataLoader
 
 from data.datasets import build_datasets, compose_task_state, dataset_manifest
 from data.schema import DUAL_TASK_STATE_NAMES, DUAL_ULTRA_ACTION_JOINT_NAMES
-from learning.inference import PolicyInference, TemporalEnsembler
+from learning.inference import PolicyInference, ReplayInference, TemporalEnsembler
 from learning.models import ACTPolicy
 from learning.models.encoders import CNNImageEncoder, ResNetImageEncoder
 from learning.training.act_trainer import ACTTrainer
@@ -90,35 +90,47 @@ class ACTTrainingTests(unittest.TestCase):
         return values
 
     def test_hydra_yaml_is_the_experiment_config(self):
-        config_dir = Path(__file__).parents[1] / "src/learning/training/conf"
+        config_dir = Path(__file__).parents[1] / "conf"
         with initialize_config_dir(config_dir=str(config_dir)):
             config = compose(config_name="config", overrides=[
-                f"dataset.paths=[{self.path}]", "dataset.camera_names=[]",
-                "model.parameters.hidden_dim=32", "model.training.kl_weight=0.1",
+                f"dataset.paths=[{self.path}]", "model.inputs.camera_names=[]",
+                "model.architecture.hidden_dim=32", "model.loss.kl_weight=0.1",
                 "train.batch_size=8", "wandb.mode=disabled",
             ])
         self.assertEqual(config.dataset.paths, [str(self.path)])
-        self.assertEqual(config.dataset.camera_names, [])
+        self.assertEqual(config.model.inputs.camera_names, [])
         self.assertEqual(config.train.batch_size, 8)
+        self.assertEqual(config.train._target_, "learning.training.act_trainer.ACTTrainer")
         self.assertEqual(config.model.name, "act")
+        self.assertEqual(config.model.chunk_size, 25)
+        self.assertNotIn("chunk_size", config.dataset)
+        self.assertNotIn("trainer", config)
         self.assertEqual(
-            config.model.parameters.image_encoder._target_,
+            config.model.encoder._target_,
             "learning.models.encoders.CNNImageEncoder",
         )
         self.assertEqual(config.inference.method, "chunk")
         with initialize_config_dir(config_dir=str(config_dir)):
             receding = compose(config_name="config", overrides=["inference=receding"])
             ensemble = compose(config_name="config", overrides=["inference=temporal_ensemble"])
-            resnet = compose(config_name="config", overrides=["encoder=resnet"])
-        self.assertEqual(config.inference.steps, 25)
+            resnet = compose(config_name="config", overrides=["model/encoder=resnet"])
+            facing = compose(config_name="config", overrides=["task=facing_dual_ultra"])
+        self.assertIsNone(config.inference.steps)
         self.assertEqual(receding.inference.method, "receding")
         self.assertEqual(ensemble.inference.method, "temporal_ensemble")
         self.assertEqual(ensemble.inference.decay, 0.01)
         self.assertEqual(
-            resnet.model.parameters.image_encoder._target_,
+            resnet.model.encoder._target_,
             "learning.models.encoders.ResNetImageEncoder",
         )
-        self.assertEqual(resnet.model.parameters.image_encoder.variant, "resnet18")
+        self.assertEqual(resnet.model.encoder.variant, "resnet18")
+        self.assertEqual(
+            facing.model.inputs.camera_names,
+            [
+                "robot_left_head_rgb", "robot_left_right_wrist_rgb",
+                "robot_right_head_rgb", "robot_right_left_wrist_rgb",
+            ],
+        )
 
     def test_image_encoders_share_a_policy_token_contract(self):
         images = torch.rand(2, 3, 32, 32)
@@ -143,6 +155,29 @@ class ACTTrainingTests(unittest.TestCase):
         np.testing.assert_allclose(
             recent_weighted.add_and_aggregate(second[:1])[0, 0], 14 / 3, rtol=1e-6,
         )
+
+    def test_replay_inference_rolls_actions_and_resets_each_environment(self):
+        replay = ReplayInference(self.path, "data/demo_000000")
+        self.assertEqual(replay.model.config["chunk_size"], 1)
+        self.assertEqual(replay.inference_config, {"method": "receding"})
+
+        observation = {"joint_pos": np.zeros((2, 24), dtype=np.float32)}
+        first = replay.predict(observation)
+        second = replay.predict(observation)
+        self.assertEqual(first.shape, (2, 1, 22))
+        np.testing.assert_allclose(first[:, 0], 0)
+        np.testing.assert_allclose(second[:, 0], 1)
+
+        replay.reset_env(1)
+        third = replay.predict(observation)
+        np.testing.assert_allclose(third[0, 0], 2)
+        np.testing.assert_allclose(third[1, 0], 0)
+        replay.predict(observation)
+        held = replay.predict(observation)
+        np.testing.assert_allclose(held[0, 0], 3)
+
+        unbatched = ReplayInference(self.path, "demo_000001")
+        self.assertEqual(unbatched.predict({"joint_pos": np.zeros(24)}).shape, (1, 22))
 
     def test_episode_split_normalization_and_padding(self):
         train, validation, normalizer = build_datasets(self.config())
@@ -265,18 +300,29 @@ class ACTTrainingTests(unittest.TestCase):
     def test_forward_train_checkpoint_and_inference(self):
         config = self.config(validation_fraction=0)
         experiment = {
-            "dataset": config,
+            "dataset": {
+                key: config[key] for key in (
+                    "paths", "episode_keys", "statuses", "validation_fraction", "seed"
+                )
+            },
             "model": {
                 "name": "act",
-                "parameters": {
+                "chunk_size": config["chunk_size"],
+                "inputs": {
+                    "state_keys": config["state_keys"], "camera_names": config["camera_names"],
+                },
+                "encoder": {"_target_": "learning.models.encoders.CNNImageEncoder"},
+                "architecture": {
                     "hidden_dim": 32, "latent_dim": 4, "feedforward_dim": 64,
                     "num_heads": 4, "num_layers": 1, "dropout": 0,
                 },
-                "training": {"kl_weight": 0.1},
+                "loss": {"kl_weight": 0.1},
             },
             "train": {
-                "epochs": 1, "batch_size": 2, "learning_rate": 1e-3,
-                "weight_decay": 1e-4, "num_workers": 0, "seed": 0,
+                "_target_": "learning.training.act_trainer.ACTTrainer",
+                "epochs": 1, "batch_size": 2, "num_workers": 0, "seed": 0,
+                "optimizer": {"learning_rate": 1e-3, "weight_decay": 1e-4},
+                "gradient_clip_norm": 1.0,
             },
             "wandb": {
                 "project": "test", "entity": None, "name": None, "group": None,
@@ -359,11 +405,12 @@ class ACTTrainingTests(unittest.TestCase):
         self.assertTrue(run.finished)
 
         config = experiment_config(
-            {"dataset": self.config(), "device": "cpu", "output": "outputs/test"},
+            {"dataset": {"paths": [str(self.path)]}, "model": {"name": "act"},
+             "device": "cpu", "output": "outputs/test"},
             {"state_dim": 22},
         )
         self.assertEqual(config["dataset"]["paths"], [str(self.path)])
-        self.assertEqual(config["model"]["state_dim"], 22)
+        self.assertEqual(config["model"]["resolved"]["state_dim"], 22)
 
 
 if __name__ == "__main__":

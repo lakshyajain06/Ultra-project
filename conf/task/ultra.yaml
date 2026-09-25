@@ -1,0 +1,11 @@
+# @package _global_
+defaults:
+  - base
+  - _self_
+
+model:
+  inputs:
+    camera_names:
+      - head_rgb
+      - left_wrist_rgb
+      - right_wrist_rgb

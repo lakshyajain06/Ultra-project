@@ -24,16 +24,6 @@ teleop = ["isaacteleop[cloudxr]==1.4.142; sys_platform == 'linux' and platform_m
 [tool.setuptools.packages.find]
 where = ["src"]
 
-[tool.setuptools.package-data]
-"learning.training.conf" = ["*.yaml"]
-"learning.training.conf.dataset" = ["*.yaml"]
-"learning.training.conf.encoder" = ["*.yaml"]
-"learning.training.conf.inference" = ["*.yaml"]
-"learning.training.conf.model" = ["*.yaml"]
-"learning.training.conf.train" = ["*.yaml"]
-"learning.training.conf.trainer" = ["*.yaml"]
-"learning.training.conf.wandb" = ["*.yaml"]
-
 [tool.uv]
 index-strategy = "unsafe-best-match"
 prerelease = "allow"

@@ -1,1 +1,0 @@
-"""Packaged Hydra configuration files."""

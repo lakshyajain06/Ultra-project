@@ -1,0 +1,11 @@
+# @package _global_
+defaults:
+  - base
+  - _self_
+
+model:
+  inputs:
+    camera_names:
+      - task_rgb
+      - left_controlled_wrist_rgb
+      - right_controlled_wrist_rgb

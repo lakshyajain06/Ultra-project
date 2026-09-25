@@ -1,0 +1,13 @@
+# @package _global_
+dataset:
+  paths: []
+  episode_keys: []
+  statuses:
+    - success
+  validation_fraction: 0.1
+  seed: 0
+
+model:
+  inputs:
+    state_keys:
+      - proprio

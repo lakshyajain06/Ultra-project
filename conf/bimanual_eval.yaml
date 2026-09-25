@@ -1,0 +1,36 @@
+defaults:
+  - policy: checkpoint
+  - inference: chunk
+  - _self_
+
+policy_device: null
+
+# facing or side_by_side
+environment: facing
+
+simulation:
+  device: cuda:0
+  num_envs: 1
+  env_spacing: 25.0
+  camera_width: 320
+  camera_height: 240
+  visualization: true
+
+rollout:
+  episodes: 5
+  max_steps: 750
+  seed: 0
+
+recording:
+  enabled: true
+  # null creates a timestamped directory under outputs/evaluation/bimanual.
+  directory: null
+  fps: 25
+
+# Keep Hydra from changing the working directory or creating its own outputs.
+hydra:
+  run:
+    dir: .
+  output_subdir: null
+  job:
+    chdir: false

@@ -43,6 +43,7 @@ FACING_CAMERA_PATHS = {
     "robot_right_left_wrist_rgb": _robot_camera_path("UltraRight", "la_wrist_fisheye"),
     "robot_right_right_wrist_rgb": _robot_camera_path("UltraRight", "ra_wrist_fisheye"),
 }
+FACING_EVALUATION_CAMERA_STREAMS = ("task_rgb", *FACING_CAMERA_PATHS)
 
 
 def facing_robot_camera_cfg(stream: str, width: int = 320, height: int = 240) -> CameraCfg:
