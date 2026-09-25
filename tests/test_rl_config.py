@@ -30,6 +30,7 @@ from sim.envs.facing_dual_ultra import (
     FACING_HANDOVER_POSITION,
     FACING_PLATE_POSITION,
     FACING_ROBOT_BASE_POSITIONS,
+    FACING_EVALUATION_CAMERA_STREAMS,
 )
 from sim.envs.cube_plate_pick_place import mdp
 
@@ -102,7 +103,7 @@ class ManagerBasedRLConfigTests(unittest.TestCase):
             "sim.envs.facing_dual_ultra.facing_dual_ultra_env_cfg:FacingDualUltraEnvCfg",
         )
         cfg = FacingDualUltraEnvCfg(
-            enabled_cameras=("robot_left_head_rgb", "robot_right_head_rgb"),
+            enabled_cameras=("task_rgb", "robot_left_head_rgb", "robot_right_head_rgb"),
             camera_width=160,
             camera_height=120,
         )
@@ -119,6 +120,9 @@ class ManagerBasedRLConfigTests(unittest.TestCase):
         })
         self.assertEqual(cfg.scene.robot_left_head_camera.width, 160)
         self.assertEqual(cfg.scene.robot_right_head_camera.height, 120)
+        self.assertEqual(FACING_EVALUATION_CAMERA_STREAMS[0], "task_rgb")
+        self.assertEqual(cfg.scene.task_camera.width, 160)
+        self.assertIsNotNone(cfg.observations.policy.task_rgb)
         left = FACING_ROBOT_BASE_POSITIONS["robot_left"]
         right = FACING_ROBOT_BASE_POSITIONS["robot_right"]
         self.assertLess(math.dist(left, FACING_CUBE_START_POSITION), 1.15)
@@ -128,8 +132,8 @@ class ManagerBasedRLConfigTests(unittest.TestCase):
         self.assertLess(math.dist(left, FACING_HANDOVER_POSITION), 1.25)
         self.assertLess(math.dist(right, FACING_HANDOVER_POSITION), 1.25)
 
-    def test_success_requires_observed_pick_handover_and_stable_placement(self):
-        cube_position = torch.tensor([[0.0, 0.0, 0.90]])
+    def test_success_requires_only_sustained_stable_placement(self):
+        cube_position = torch.tensor([[0.0, 0.0, 0.8375]])
         zero = torch.zeros((1, 3))
         left_pose = torch.tensor([[[0.0, 0.0, 0.90, 0.0, 0.0, 0.0, 1.0]]])
         right_pose = torch.tensor([[[1.0, 0.0, 0.90, 0.0, 0.0, 0.0, 1.0]]])
@@ -146,7 +150,7 @@ class ManagerBasedRLConfigTests(unittest.TestCase):
                     root_quat_w=torch.tensor([[0.0, 0.0, 0.0, 1.0]]),
                     root_lin_vel_w=zero.clone(),
                 ),
-                "robot_left": _asset(joint_pos=torch.tensor([[0.0]]), body_link_pose_w=left_pose),
+                "robot_left": _asset(joint_pos=torch.tensor([[0.045]]), body_link_pose_w=left_pose),
                 "robot_right": _asset(joint_pos=torch.tensor([[0.045]]), body_link_pose_w=right_pose),
             },
         )
@@ -158,17 +162,10 @@ class ManagerBasedRLConfigTests(unittest.TestCase):
         }
         term = dual_mdp.SustainedHandoverPlacement(SimpleNamespace(), env)
         self.assertFalse(term(env, hold_steps=3, **params).item())
-        env.scene["robot_left"].data.joint_pos[0, 0] = 0.045
-        env.scene["robot_right"].data.joint_pos[0, 0] = 0.0
-        right_pose[0, 0, :3] = cube_position[0]
-        self.assertFalse(term(env, hold_steps=3, **params).item())
-        cube_position[0] = torch.tensor([0.0, 0.0, 0.8375])
-        left_pose[0, 0, :3] = 1.0
-        right_pose[0, 0, :3] = 1.0
-        env.scene["robot_right"].data.joint_pos[0, 0] = 0.045
-        self.assertFalse(term(env, hold_steps=3, **params).item())
         self.assertFalse(term(env, hold_steps=3, **params).item())
         self.assertTrue(term(env, hold_steps=3, **params).item())
+        cube_position[0, 0] = 0.2
+        self.assertFalse(term(env, hold_steps=3, **params).item())
 
     def test_cameras_can_be_independently_configured(self):
         cfg = UltraCubePlateEnvCfg(enabled_cameras=("head_rgb",), camera_width=160, camera_height=120)

@@ -165,18 +165,14 @@ def cube_on_plate(
 
 
 class SustainedHandoverPlacement(ManagerTermBase):
-    """Require a giver grasp, a transfer, and then stable released placement."""
+    """Require only a stable released placement, independent of grasp history."""
 
     def __init__(self, cfg, env):
         super().__init__(cfg, env)
-        self._giver_grasp_seen = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
-        self._handover_seen = torch.zeros_like(self._giver_grasp_seen)
         self._stable_steps = torch.zeros(env.num_envs, dtype=torch.long, device=env.device)
 
     def reset(self, env_ids=None):
         targets = slice(None) if env_ids is None else env_ids
-        self._giver_grasp_seen[targets] = False
-        self._handover_seen[targets] = False
         self._stable_steps[targets] = 0
 
     def __call__(
@@ -191,20 +187,12 @@ class SustainedHandoverPlacement(ManagerTermBase):
     ):
         if hold_steps < 1:
             raise ValueError("hold_steps must be positive")
-        lifted = _tensor(env.scene["cube"].data.root_pos_w)[:, 2] > minimum_height
-        giver_grasp = lifted & _closed_near_cube(env, giver_gripper_cfg, giver_eef_cfg)
-        self._giver_grasp_seen |= giver_grasp
-        transfer = (
-            self._giver_grasp_seen
-            & _closed_near_cube(env, receiver_gripper_cfg, receiver_eef_cfg)
-            & _giver_released(env, giver_gripper_cfg, giver_eef_cfg)
-        )
-        self._handover_seen |= transfer
+        del minimum_height  # Retained in the call signature for configuration compatibility.
         placed = cube_on_plate(
             env, giver_eef_cfg, giver_gripper_cfg, receiver_eef_cfg, receiver_gripper_cfg
         )
         self._stable_steps = torch.where(
-            self._handover_seen & placed,
+            placed,
             self._stable_steps + 1,
             torch.zeros_like(self._stable_steps),
         )
